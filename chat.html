@@ -1016,6 +1016,26 @@
     .doc-a4 .doc-sig-block { margin-top:48px; border-top:1px solid #000; padding-top:8px; font-size:11pt; }
     .doc-a4 .doc-footer-bar { margin-top:40px; border-top:1px solid #ddd; padding-top:8px; font-size:9pt; color:#999; text-align:center; }
 
+    /* ── MOBILE: A4 viewer ── */
+    @media (max-width: 640px) {
+      .doc-pages {
+        padding: 0;          /* paper fills full screen width */
+        align-items: stretch;
+      }
+      .doc-a4 {
+        padding: 24px 20px;  /* ~20px margins — fits all phones */
+        min-height: auto;    /* natural height, scroll freely */
+        font-size: 11pt;
+        box-shadow: none;
+        border-radius: 0;
+        width: 100%;
+        max-width: 100%;
+      }
+      .doc-toolbar { padding: 0 12px; height: 48px; }
+      .doc-tbtn { padding: 6px 12px; font-size: 12px; }
+      .doc-toolbar-title { font-size: 13px; }
+    }
+
     /* #docOverlay2 hidden by default — fix auto-open bug */
     #docOverlay2 { display: none; position: fixed; inset: 0; z-index: 1000; }
 
