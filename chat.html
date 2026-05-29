@@ -2678,18 +2678,20 @@ async function send() {
         const docTitleClean = docTitle ? docTitle.charAt(0).toUpperCase() + docTitle.slice(1) : '';
 
         if (isDocument && parsedText) {
-          // Auto-save to Supabase library
+          // Save to library
           saveDocumentToLibrary(docTitleClean, parsedText);
 
-          // Show document ready card
-          const docHtml = mdToHtml(parsedText);
-          _sDiv.innerHTML = '<div style="padding:14px;background:var(--surface-2);border:1px solid var(--border);border-radius:10px;">'
-            + '<div style="font-size:13px;color:var(--text2);margin-bottom:6px;">📄 <strong>' + docTitleClean + '</strong> is ready</div>'
-            + '<div style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">Saved to your Documents library</div>'
-            + '<button onclick="openDocViewer(this.closest(\'.msg-body\').querySelector(\'.doc-hidden-html\').innerHTML, this.closest(\'.msg-body\').querySelector(\'.doc-hidden-text\').textContent, \'' + docTitleClean.replace(/'/g, '') + '\')" style="background:var(--accent);color:#fff;border:none;padding:10px 18px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600;width:100%">📄 Open & Edit Document</button>'
+          // Open A4 viewer immediately — no click needed
+          openDocViewer(parsedText, parsedText, docTitleClean);
+
+          // Leave a compact card in chat with a Reopen button
+          const safeTitle = docTitleClean.replace(/'/g, "\\'");
+          _sDiv.innerHTML = '<div style="display:flex;align-items:center;gap:12px;padding:12px 14px;background:var(--surface-2);border:1px solid var(--border);border-radius:10px">'
+            + '<span style="font-size:22px;flex-shrink:0">📄</span>'
+            + '<div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + docTitleClean + '</div>'
+            + '<div style="font-size:12px;color:var(--text-muted);margin-top:2px">Saved · <span style="color:var(--accent)">Viewing now</span></div></div>'
+            + '<button onclick="document.getElementById(\'docOverlay\').classList.add(\'open\');document.body.style.overflow=\'hidden\'" style="background:var(--accent);color:#fff;border:none;padding:7px 14px;border-radius:7px;cursor:pointer;font-size:12px;font-weight:600;flex-shrink:0">↗ Reopen</button>'
             + '</div>'
-            + '<div class="doc-hidden-html" style="display:none">' + docHtml + '</div>'
-            + '<div class="doc-hidden-text" style="display:none">' + parsedText + '</div>'
             + _ACTIONS;
         } else {
           _sDiv.innerHTML = mdToHtml(parsedText) + _ACTIONS;
@@ -3925,21 +3927,21 @@ async function startDocumentFlow(docType) {
       }
 
       if (reply) {
-        // Clean up title
         const docTitle = docType.charAt(0).toUpperCase() + docType.slice(1);
-        const docHtml = mdToHtml(reply);
 
         // Save to library
         saveDocumentToLibrary(docTitle, reply).catch(() => {});
 
-        // Show document ready card with viewer button
-        _dDiv.innerHTML = '<div style="padding:14px;background:var(--surface-2);border:1px solid var(--border);border-radius:10px;">'
-          + '<div style="font-size:13px;color:var(--text);margin-bottom:6px;">📄 <strong>' + docTitle + '</strong> is ready</div>'
-          + '<div style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">✓ Saved to your Documents library</div>'
-          + '<button onclick="openDocViewer(this.parentElement.nextElementSibling.innerHTML, this.parentElement.nextElementSibling.nextElementSibling.textContent, \'' + docTitle.replace(/'/g,'') + '\')" style="background:var(--accent);color:#fff;border:none;padding:10px 18px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600;width:100%">📄 Open & Edit Document</button>'
-          + '</div>'
-          + '<div style="display:none">' + docHtml + '</div>'
-          + '<div style="display:none">' + reply + '</div>';
+        // Open A4 viewer immediately
+        openDocViewer(reply, reply, docTitle);
+
+        // Compact card in chat with Reopen button
+        _dDiv.innerHTML = '<div style="display:flex;align-items:center;gap:12px;padding:12px 14px;background:var(--surface-2);border:1px solid var(--border);border-radius:10px">'
+          + '<span style="font-size:22px;flex-shrink:0">📄</span>'
+          + '<div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + docTitle + '</div>'
+          + '<div style="font-size:12px;color:var(--text-muted);margin-top:2px">Saved · <span style="color:var(--accent)">Viewing now</span></div></div>'
+          + '<button onclick="document.getElementById(\'docOverlay\').classList.add(\'open\');document.body.style.overflow=\'hidden\'" style="background:var(--accent);color:#fff;border:none;padding:7px 14px;border-radius:7px;cursor:pointer;font-size:12px;font-weight:600;flex-shrink:0">↗ Reopen</button>'
+          + '</div>';
 
         scrollDown();
       } else {
