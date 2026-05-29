@@ -2702,29 +2702,43 @@ async function send() {
         const docTitleClean = docTitle ? docTitle.charAt(0).toUpperCase() + docTitle.slice(1) : '';
 
         if (isDocument && parsedText) {
-          // Save to library
-          saveDocumentToLibrary(docTitleClean, parsedText);
-
-          // Open A4 viewer immediately — no click needed
+          // Open A4 viewer immediately
           openDocViewer(parsedText, parsedText, docTitleClean);
 
-          // Leave a compact card in chat with a Reopen button
-          const safeTitle = docTitleClean.replace(/'/g, "\\'");
-          _sDiv.innerHTML = '<div style="display:flex;align-items:center;gap:12px;padding:12px 14px;background:var(--surface-2);border:1px solid var(--border);border-radius:10px">'
+          // Compact card — unique ID so we can update status after save
+          const _cardId = 'dc' + Date.now();
+          _sDiv.innerHTML = '<div id="' + _cardId + '" style="display:flex;align-items:center;gap:12px;padding:12px 14px;background:var(--surface-2);border:1px solid var(--border);border-radius:10px">'
             + '<span style="font-size:22px;flex-shrink:0">📄</span>'
             + '<div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + docTitleClean + '</div>'
-            + '<div style="font-size:12px;color:var(--text-muted);margin-top:2px">Saved · <span style="color:var(--accent)">Viewing now</span></div></div>'
+            + '<div class="doc-save-status" style="font-size:12px;color:var(--text-muted);margin-top:2px">Saving…</div></div>'
             + '<button onclick="document.getElementById(\'docOverlay\').classList.add(\'open\');document.body.style.overflow=\'hidden\'" style="background:var(--accent);color:#fff;border:none;padding:7px 14px;border-radius:7px;cursor:pointer;font-size:12px;font-weight:600;flex-shrink:0">↗ Reopen</button>'
             + '</div>'
             + _ACTIONS;
-        } else {
-          _sDiv.innerHTML = mdToHtml(parsedText) + _ACTIONS;
+
+          scrollDown();
+          history.push({ role: 'assistant', content: reply });
+
+          // saveTurn first — creates chat record so currentChatId is set
+          await saveTurn(docTitleClean, reply).catch(() => {});
+
+          // Now save document with correct currentChatId
+          const saved = await saveDocumentToLibrary(docTitleClean, parsedText);
+
+          // Update card status
+          const statusEl = document.querySelector('#' + _cardId + ' .doc-save-status');
+          if (statusEl) statusEl.innerHTML = saved
+            ? '✓ Saved to Documents · <span style="color:var(--accent)">Viewing now</span>'
+            : '<span style="color:#e8908a">⚠ Save failed — check connection</span>';
+
+          busy = false;
+          document.getElementById('sendBtn').disabled = false;
+          return;
         }
 
+        _sDiv.innerHTML = mdToHtml(parsedText) + _ACTIONS;
         scrollDown();
         history.push({ role: 'assistant', content: reply });
-        // Save to chat history sidebar
-        if (reply) saveTurn(isDocument ? docTitleClean : text, reply).catch(() => {});
+        if (reply) saveTurn(text, reply).catch(() => {});
         busy = false;
         document.getElementById('sendBtn').disabled = false;
         return;
@@ -2903,19 +2917,26 @@ async function deleteSavedDoc(docId, btn) {
 async function saveDocumentToLibrary(title, content) {
   if (!currentUser) {
     const { data: { user } } = await sb.auth.getUser();
-    if (!user) return;
+    if (!user) return null;
     currentUser = user;
   }
   try {
-    await sb.from('generated_documents').insert({
+    const { data, error } = await sb.from('generated_documents').insert({
       user_id: currentUser.id,
-      chat_id: currentChatId,
+      chat_id: currentChatId || null,
       title: title || 'Legal Document',
       content: content,
       created_at: new Date().toISOString()
-    });
+    }).select().single();
+    if (error) throw error;
+    // Refresh the docs sidebar list if it's currently open
+    if (document.getElementById('docsPanelOverlay')?.classList.contains('active')) {
+      loadUserDocuments();
+    }
+    return data;
   } catch(e) {
     console.error('Failed to save document:', e);
+    return null;
   }
 }
 
@@ -3953,21 +3974,30 @@ async function startDocumentFlow(docType) {
       if (reply) {
         const docTitle = docType.charAt(0).toUpperCase() + docType.slice(1);
 
-        // Save to library
-        saveDocumentToLibrary(docTitle, reply).catch(() => {});
-
         // Open A4 viewer immediately
         openDocViewer(reply, reply, docTitle);
 
-        // Compact card in chat with Reopen button
-        _dDiv.innerHTML = '<div style="display:flex;align-items:center;gap:12px;padding:12px 14px;background:var(--surface-2);border:1px solid var(--border);border-radius:10px">'
+        // Compact card with unique ID for status update
+        const _cardId = 'dc' + Date.now();
+        _dDiv.innerHTML = '<div id="' + _cardId + '" style="display:flex;align-items:center;gap:12px;padding:12px 14px;background:var(--surface-2);border:1px solid var(--border);border-radius:10px">'
           + '<span style="font-size:22px;flex-shrink:0">📄</span>'
           + '<div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + docTitle + '</div>'
-          + '<div style="font-size:12px;color:var(--text-muted);margin-top:2px">Saved · <span style="color:var(--accent)">Viewing now</span></div></div>'
+          + '<div class="doc-save-status" style="font-size:12px;color:var(--text-muted);margin-top:2px">Saving…</div></div>'
           + '<button onclick="document.getElementById(\'docOverlay\').classList.add(\'open\');document.body.style.overflow=\'hidden\'" style="background:var(--accent);color:#fff;border:none;padding:7px 14px;border-radius:7px;cursor:pointer;font-size:12px;font-weight:600;flex-shrink:0">↗ Reopen</button>'
           + '</div>';
 
         scrollDown();
+        history.push({ role: 'assistant', content: reply });
+
+        // saveTurn first so currentChatId is set before saving the document
+        await saveTurn(docTitle, reply).catch(() => {});
+        const saved = await saveDocumentToLibrary(docTitle, reply);
+
+        const statusEl = document.querySelector('#' + _cardId + ' .doc-save-status');
+        if (statusEl) statusEl.innerHTML = saved
+          ? '✓ Saved to Documents · <span style="color:var(--accent)">Viewing now</span>'
+          : '<span style="color:#e8908a">⚠ Save failed — check connection</span>';
+
       } else {
         _dDiv.innerHTML = '<p style="color:#e8908a">⚠ Document generation failed. Please try again.</p>';
       }
@@ -3986,12 +4016,9 @@ async function startDocumentFlow(docType) {
       }
       removeTyping();
       addAI(mdToHtml(reply));
+      history.push({ role: 'assistant', content: reply });
+      if (reply) saveTurn(userMsg, reply).catch(() => {});
     }
-
-    history.push({ role: 'assistant', content: reply });
-
-    // Save turn for history
-    if (reply) saveTurn(userMsg, reply).catch(() => {});
 
   } catch(err) {
     removeTyping();
