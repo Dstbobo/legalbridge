@@ -2719,7 +2719,8 @@ async function send() {
           history.push({ role: 'assistant', content: reply });
 
           // saveTurn first — creates chat record so currentChatId is set
-          await saveTurn(docTitleClean, reply).catch(() => {});
+          // Use actual user message (text), not the derived title
+          await saveTurn(text, reply).catch(() => {});
 
           // Now save document with correct currentChatId
           const saved = await saveDocumentToLibrary(docTitleClean, parsedText);
@@ -4274,12 +4275,43 @@ async function openChat(chatId, title, el) {
   const ws = document.getElementById('welcomeState');
   if (ws) ws.remove();
 
+  // Fetch saved documents for this chat so we can restore the A4 card
+  let chatDocs = [];
+  try {
+    const { data: docsData } = await sb
+      .from('generated_documents')
+      .select('id, title, content')
+      .eq('chat_id', chatId)
+      .order('created_at', { ascending: true });
+    if (docsData) chatDocs = docsData;
+  } catch (_) {}
+
   for (const m of msgs) {
     if (m.role === 'user') {
       addUser(m.content);
     } else {
-      const html = m.content.includes('<') ? m.content : mdToHtml(m.content);
-      addAI(html);
+      // Check if this assistant message is a saved document
+      const matchedDoc = chatDocs.find(d => d.content === m.content);
+      if (matchedDoc) {
+        // Restore as compact card with A4 Reopen button
+        const row = document.createElement('div');
+        row.className = 'msg-row ai-row';
+        row.innerHTML = '<div class="msg-avatar" style="display:none"></div>'
+          + '<div class="msg-body"><div class="ai-content">'
+          + '<div style="display:flex;align-items:center;gap:12px;padding:12px 14px;background:var(--surface-2);border:1px solid var(--border);border-radius:10px">'
+          + '<span style="font-size:22px;flex-shrink:0">📄</span>'
+          + '<div style="flex:1;min-width:0">'
+          + '<div style="font-size:13px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + (matchedDoc.title || 'Legal Document') + '</div>'
+          + '<div style="font-size:12px;color:var(--text-muted);margin-top:2px">✓ Saved to Documents</div>'
+          + '</div>'
+          + '<button onclick="openSavedDoc(\'' + matchedDoc.id + '\')" style="background:var(--accent);color:#fff;border:none;padding:7px 14px;border-radius:7px;cursor:pointer;font-size:12px;font-weight:600;flex-shrink:0">↗ Open</button>'
+          + '</div>'
+          + '</div></div>';
+        document.getElementById('messagesInner').appendChild(row);
+      } else {
+        const html = m.content.includes('<') ? m.content : mdToHtml(m.content);
+        addAI(html);
+      }
     }
     history.push({ role: m.role, content: m.content });
   }
