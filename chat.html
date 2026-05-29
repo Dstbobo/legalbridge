@@ -1764,7 +1764,7 @@
         <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
         My Cases
       </a>
-      <a class="sidebar-nav-item" href="#documents" onclick="closeSidebar();openDocsPanel()">
+      <a class="sidebar-nav-item" href="javascript:void(0)" onclick="closeSidebar();openDocsPanel()">
         <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8" stroke-width="1.8"/><line x1="16" y1="13" x2="8" y2="13" stroke-width="1.8"/><line x1="16" y1="17" x2="8" y2="17" stroke-width="1.8"/></svg>
         Documents
       </a>
@@ -2720,7 +2720,7 @@ async function send() {
           history.push({ role: 'assistant', content: reply });
 
           // STEP 1: Ensure chat record exists — sets currentChatId reliably
-          await ensureChatExists(text);
+          await ensureChatExists(text).catch(e => console.error('ensureChat err:', e));
 
           // STEP 2: Save document to library (chat_id is now guaranteed set)
           const savedDoc = await saveDocumentToLibrary(docTitleClean, parsedText);
@@ -2835,8 +2835,9 @@ async function loadUserDocuments() {
   if (!currentUser) return;
   const container = document.getElementById('docsListContainer');
   const empty = document.getElementById('docsEmptyState');
-  container.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-muted);font-size:13px">Loading...</div>';
-  empty.style.display = 'none';
+  if (!container) return;
+  container.innerHTML = '<div style="text-align:center;padding:24px;color:var(--text-muted);font-size:13px">Loading your documents…</div>';
+  if (empty) empty.style.display = 'none';
 
   try {
     const { data, error } = await sb
@@ -2844,33 +2845,79 @@ async function loadUserDocuments() {
       .select('*')
       .eq('user_id', currentUser.id)
       .order('created_at', { ascending: false })
-      .limit(50);
+      .limit(100);
 
     if (error) throw error;
 
     if (!data || data.length === 0) {
       container.innerHTML = '';
-      empty.style.display = 'block';
+      if (empty) empty.style.display = 'flex';
       return;
     }
 
-    empty.style.display = 'none';
-    container.innerHTML = data.map(doc => `
+    if (empty) empty.style.display = 'none';
+
+    const typeColors = {
+      'Affidavit':   '#4a8ef5', 'Agreement':  '#22c55e', 'Contract':  '#22c55e',
+      'Deed':        '#f59e0b', 'Petition':   '#a78bfa', 'Motion':    '#a78bfa',
+      'Writ':        '#ef4444', 'Notice':     '#f97316', 'Memo':      '#06b6d4',
+      'Tenancy':     '#10b981', 'Employment': '#6366f1', 'Divorce':   '#ec4899',
+      'Letter':      '#84cc16', 'Legal Doc':  '#6b7280'
+    };
+
+    container.innerHTML = data.map(doc => {
+      const type  = getDocType(doc.title);
+      const color = typeColors[type] || '#6b7280';
+      const words = doc.content ? Math.round(doc.content.split(/\s+/).length) : 0;
+      const date  = formatDocDate(doc.created_at);
+      const safeTitle = (doc.title || 'Untitled Document').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+      return `
       <div class="doc-card" data-id="${doc.id}">
-        <div class="doc-card-title">${doc.title || 'Untitled Document'}</div>
-        <div class="doc-card-meta">
-          <span class="doc-card-type">${getDocType(doc.title)}</span>
-          <span>${formatDocDate(doc.created_at)}</span>
+        <div style="display:flex;align-items:flex-start;gap:12px">
+          <div style="width:36px;height:36px;border-radius:8px;background:${color}22;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:16px">📄</div>
+          <div style="flex:1;min-width:0">
+            <div class="doc-card-title" style="margin-bottom:4px">${doc.title || 'Untitled Document'}</div>
+            <div class="doc-card-meta">
+              <span class="doc-card-type" style="background:${color}22;color:${color}">${type}</span>
+              <span>${date}</span>
+              <span>${words.toLocaleString()} words</span>
+            </div>
+          </div>
         </div>
-        <div class="doc-card-actions">
-          <button class="doc-card-btn doc-card-btn-primary" onclick="openSavedDoc('${doc.id}')">📄 Open</button>
-          <button class="doc-card-btn" onclick="deleteSavedDoc('${doc.id}', this)">🗑 Delete</button>
+        <div class="doc-card-actions" style="margin-top:12px">
+          <button class="doc-card-btn doc-card-btn-primary" onclick="openSavedDoc('${doc.id}')">
+            ↗ Open in Viewer
+          </button>
+          <button class="doc-card-btn" onclick="downloadSavedDocx('${doc.id}', '${safeTitle}', this)" style="display:flex;align-items:center;justify-content:center;gap:4px">
+            ⬇ Word
+          </button>
+          <button class="doc-card-btn" onclick="deleteSavedDoc('${doc.id}', this)" style="flex:none;padding:6px 10px;color:#e8908a;border-color:#e8908a33">
+            🗑
+          </button>
         </div>
-      </div>
-    `).join('');
+      </div>`;
+    }).join('');
 
   } catch(e) {
-    container.innerHTML = '<div style="text-align:center;padding:20px;color:#e8908a;font-size:13px">Failed to load documents</div>';
+    container.innerHTML = '<div style="text-align:center;padding:20px;color:#e8908a;font-size:13px">Failed to load documents<br><small>' + (e.message || '') + '</small></div>';
+  }
+}
+
+async function downloadSavedDocx(docId, title, btn) {
+  if (!window.docx) { alert('Word export loading — try again in a moment'); return; }
+  const origText = btn.innerHTML;
+  btn.innerHTML = '⏳';
+  btn.disabled = true;
+  try {
+    const { data, error } = await sb.from('generated_documents').select('content,title').eq('id', docId).single();
+    if (error || !data) throw new Error('Could not load document');
+    _docRawText = data.content;
+    _docTitle   = (data.title || 'LegalBridge_Document').replace(/[^a-zA-Z0-9_\- ]/g, '_');
+    await downloadDocx();
+  } catch(e) {
+    alert('Download failed: ' + e.message);
+    btn.innerHTML = origText;
+    btn.disabled  = false;
   }
 }
 
@@ -4003,7 +4050,7 @@ async function startDocumentFlow(docType) {
         history.push({ role: 'assistant', content: reply });
 
         // STEP 1: Ensure chat exists
-        await ensureChatExists(userMsg);
+        await ensureChatExists(userMsg).catch(e => console.error('ensureChat err:', e));
 
         // STEP 2: Save document
         const savedDoc = await saveDocumentToLibrary(docTitle, reply);
@@ -4685,6 +4732,25 @@ function openSettings() {
   onViewportChange();
 })();
 </script>
+
+<!-- ── DOCUMENTS LIBRARY PANEL (real DOM) ── -->
+<div class="docs-panel-overlay" id="docsPanelOverlay" onclick="if(event.target===this)closeDocsPanel()">
+  <div class="docs-panel">
+    <div class="docs-panel-header">
+      <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" style="width:20px;height:20px;opacity:0.7"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8" stroke-width="1.8"/></svg>
+      <h2 style="flex:1;margin:0;font-size:16px;font-weight:600">My Documents</h2>
+      <button class="docs-panel-close" onclick="closeDocsPanel()">✕</button>
+    </div>
+    <div class="docs-panel-body" id="docsPanelBody">
+      <div class="docs-panel-empty" id="docsEmptyState">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+        <div style="font-size:14px;font-weight:600;margin-bottom:6px">No documents yet</div>
+        <div style="font-size:13px;color:var(--text-muted)">Documents you draft will appear here</div>
+      </div>
+      <div id="docsListContainer"></div>
+    </div>
+  </div>
+</div>
 
 </body>
 </html>
