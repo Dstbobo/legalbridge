@@ -934,7 +934,90 @@
       overflow: hidden;
     }
     #docOverlay.open { display: flex; }
-    #docOverlay2.open { display: flex; }
+
+    /* ── DOCUMENT VIEWER TOOLBAR ── */
+    .doc-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 20px;
+      height: 54px;
+      background: #0d1117;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+      flex-shrink: 0;
+      gap: 12px;
+    }
+    .doc-toolbar-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: rgba(255,255,255,0.85);
+      flex: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .doc-toolbar-actions { display: flex; gap: 10px; align-items: center; }
+    .doc-tbtn {
+      padding: 8px 18px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      font-family: var(--font-sans);
+      cursor: pointer;
+      border: none;
+      transition: opacity 0.15s;
+      white-space: nowrap;
+    }
+    .doc-tbtn:hover { opacity: 0.85; }
+    .doc-tbtn-primary { background: var(--accent); color: #fff; }
+    .doc-tbtn-pdf { background: rgba(255,255,255,0.1); color: #fff; border: 1px solid rgba(255,255,255,0.15) !important; }
+    .doc-tbtn-close {
+      background: none;
+      border: none;
+      color: rgba(255,255,255,0.4);
+      cursor: pointer;
+      padding: 6px 10px;
+      font-size: 18px;
+      line-height: 1;
+    }
+    .doc-tbtn-close:hover { color: #fff; }
+
+    /* ── A4 PAGES AREA ── */
+    .doc-pages {
+      flex: 1;
+      overflow-y: auto;
+      background: #1a1f2e;
+      padding: 32px 16px 48px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .doc-a4 {
+      background: #ffffff;
+      color: #000000;
+      width: 100%;
+      max-width: 794px;
+      min-height: 1122px;
+      padding: 72px 80px;
+      font-family: 'Times New Roman', Times, serif;
+      font-size: 12pt;
+      line-height: 1.8;
+      box-shadow: 0 4px 32px rgba(0,0,0,0.6);
+      box-sizing: border-box;
+      outline: none;
+      word-break: break-word;
+    }
+    .doc-a4:focus { outline: 2px solid rgba(74,142,245,0.35); outline-offset: 2px; }
+    .doc-a4 h1 { text-align:center; font-size:16pt; font-weight:bold; text-transform:uppercase; letter-spacing:0.06em; margin:0 0 28px; }
+    .doc-a4 h2 { font-size:12pt; font-weight:bold; text-transform:uppercase; margin:22px 0 8px; border-bottom:1px solid #000; padding-bottom:3px; }
+    .doc-a4 h3 { font-size:12pt; font-weight:bold; margin:16px 0 6px; }
+    .doc-a4 p { margin:6px 0; text-align:justify; }
+    .doc-a4 .doc-clause { margin:6px 0 6px 28px; text-align:justify; }
+    .doc-a4 .doc-sig-block { margin-top:48px; border-top:1px solid #000; padding-top:8px; font-size:11pt; }
+    .doc-a4 .doc-footer-bar { margin-top:40px; border-top:1px solid #ddd; padding-top:8px; font-size:9pt; color:#999; text-align:center; }
+
+    /* #docOverlay2 hidden by default — fix auto-open bug */
+    #docOverlay2 { display: none; position: fixed; inset: 0; z-index: 1000; }
 
     .doc-overlay-header {
       display: flex;
@@ -2816,11 +2899,64 @@ async function saveDocumentToLibrary(title, content) {
 let _docRawText = '';
 let _docTitle = 'LegalBridge_Document';
 
+function formatLegalDocHtml(text) {
+  if (!text) return '';
+  const lines = text.split('\n');
+  let html = '';
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i];
+    const line = raw.trim();
+    if (!line) { html += '<div style="margin:0.45em 0"></div>'; continue; }
+
+    // Inline bold/italic helpers
+    const fmt = s => s
+      .replace(/\*\*\*(.*?)\*\*\*/g, '<strong><em>$1</em></strong>')
+      .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*(.*?)\*/g, '<em>$1</em>');
+
+    // H1 → centered uppercase title
+    if (line.startsWith('# ')) {
+      html += `<h1>${fmt(line.slice(2))}</h1>`; continue;
+    }
+    // H2 → section heading
+    if (line.startsWith('## ')) {
+      html += `<h2>${fmt(line.slice(3))}</h2>`; continue;
+    }
+    // H3 → sub-heading
+    if (line.startsWith('### ')) {
+      html += `<h3>${fmt(line.slice(4))}</h3>`; continue;
+    }
+    // Horizontal rule
+    if (/^-{3,}$/.test(line)) {
+      html += '<hr style="border:none;border-top:1px solid #000;margin:20px 0">'; continue;
+    }
+    // Numbered clause (1. or 1) …)
+    if (/^\d+[\.)]\s/.test(line)) {
+      html += `<p class="doc-clause">${fmt(line)}</p>`; continue;
+    }
+    // Signature / execution block detection
+    if (/^(signed|signature|deponent|petitioner|respondent|solicitor|counsel|sworn|executed|in witness|commissioner|date)[:\s]/i.test(line)
+        || /_{4,}/.test(line)) {
+      html += `<div class="doc-sig-block">${fmt(line)}</div>`; continue;
+    }
+    // All-bold line (standalone label)
+    if (/^\*\*[^*]+\*\*$/.test(line)) {
+      html += `<p style="font-weight:bold;margin:14px 0 4px">${fmt(line)}</p>`; continue;
+    }
+    // Regular paragraph
+    html += `<p>${fmt(line)}</p>`;
+  }
+  // Footer
+  html += '<div class="doc-footer-bar">Generated by LegalBridge AI &bull; legalbridge.ng &bull; For professional use only</div>';
+  return html;
+}
+
 function openDocViewer(htmlContent, rawText, title) {
   _docRawText = rawText || '';
   _docTitle = (title || 'LegalBridge_Document').replace(/[^a-zA-Z0-9_\- ]/g, '_');
-  const a4 = document.getElementById('docA4');
-  a4.innerHTML = htmlContent + '<div class="doc-footer-bar" style="position:relative;margin-top:40px;border-top:1px solid #ddd;padding-top:8px;font-size:10px;color:#999;text-align:center">Generated by LegalBridge AI • legalbridge.ng • For professional use only</div>';
+  // Use raw text for proper legal formatting; fall back to stripping the passed HTML
+  const source = rawText || (htmlContent || '').replace(/<[^>]+>/g, '');
+  document.getElementById('docA4').innerHTML = formatLegalDocHtml(source);
   document.getElementById('docTitle').textContent = '📄 ' + (title || 'Legal Document');
   document.getElementById('docOverlay').classList.add('open');
   document.body.style.overflow = 'hidden';
@@ -2829,6 +2965,33 @@ function openDocViewer(htmlContent, rawText, title) {
 function closeDocViewer() {
   document.getElementById('docOverlay').classList.remove('open');
   document.body.style.overflow = '';
+}
+
+function downloadDocPDF() {
+  const title = _docTitle || 'LegalBridge_Document';
+  const content = document.getElementById('docA4').innerHTML;
+  const win = window.open('', '_blank');
+  if (!win) { alert('Please allow popups to download PDF'); return; }
+  win.document.write(`<!DOCTYPE html><html><head>
+<meta charset="UTF-8"><title>${title}</title>
+<style>
+  @page { size: A4; margin: 72pt; }
+  * { box-sizing: border-box; }
+  body { font-family: 'Times New Roman', Times, serif; font-size: 12pt; color: #000; background: #fff; margin: 0; padding: 0; line-height: 1.8; }
+  h1 { text-align: center; font-size: 16pt; font-weight: bold; text-transform: uppercase; letter-spacing: 0.06em; margin: 0 0 28px; }
+  h2 { font-size: 12pt; font-weight: bold; text-transform: uppercase; margin: 22px 0 8px; border-bottom: 1px solid #000; padding-bottom: 3px; }
+  h3 { font-size: 12pt; font-weight: bold; margin: 16px 0 6px; }
+  p { margin: 6px 0; text-align: justify; }
+  .doc-clause { margin: 6px 0 6px 28pt; text-align: justify; }
+  .doc-sig-block { margin-top: 48pt; border-top: 1px solid #000; padding-top: 8px; font-size: 11pt; }
+  .doc-footer-bar { margin-top: 40pt; border-top: 1px solid #ddd; padding-top: 6px; font-size: 9pt; color: #999; text-align: center; }
+  hr { border: none; border-top: 1px solid #000; margin: 20px 0; }
+  @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
+</style>
+</head><body>${content}</body></html>`);
+  win.document.close();
+  win.focus();
+  setTimeout(() => { win.print(); }, 400);
 }
 
 function copyDocText() {
@@ -3897,29 +4060,7 @@ function printDoc() {
   window.print();
 }
 
-function downloadDocPDF() {
-  const content = document.getElementById('docContent').innerHTML;
-  const title = document.getElementById('docOverlayTitle').textContent;
-  const win = window.open('', '_blank');
-  win.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${title}</title>
-<style>
-  body {
-    font-family: 'Times New Roman', Times, serif;
-    font-size: 12pt;
-    color: #000;
-    background: #fff;
-    margin: 0;
-    padding: 25mm 30mm;
-    line-height: 2;
-  }
-  @media print {
-    @page { size: A4; margin: 20mm 25mm; }
-    body { padding: 0; }
-  }
-</style></head><body>${content}</body></html>`);
-  win.document.close();
-  setTimeout(() => { win.focus(); win.print(); }, 600);
-}
+// downloadDocPDF() is defined earlier — handles #docA4 content
 
 // ═══════════════════════════════════════════════════════
 // SUPABASE INTEGRATION
@@ -4145,7 +4286,22 @@ document.addEventListener('DOMContentLoaded', () => {
   </div>
 </div>
 
-<!-- DOCUMENT OVERLAY -->
+<!-- ── DOCUMENT VIEWER (primary) ── -->
+<div id="docOverlay">
+  <div class="doc-toolbar">
+    <span class="doc-toolbar-title" id="docTitle">📄 Legal Document</span>
+    <div class="doc-toolbar-actions">
+      <button class="doc-tbtn doc-tbtn-primary" onclick="downloadDocx()">⬇ Word (.docx)</button>
+      <button class="doc-tbtn doc-tbtn-pdf" onclick="downloadDocPDF()">⬇ PDF</button>
+      <button class="doc-tbtn-close" onclick="closeDocViewer()" title="Close">✕</button>
+    </div>
+  </div>
+  <div class="doc-pages">
+    <div class="doc-a4" id="docA4" contenteditable="true" spellcheck="false"></div>
+  </div>
+</div>
+
+<!-- DOCUMENT OVERLAY 2 (legacy — kept for generateDocument() path) -->
 <div id="docOverlay2">
   <div class="doc-overlay-header">
     <div class="doc-overlay-title" id="docOverlayTitle">Legal Document</div>
