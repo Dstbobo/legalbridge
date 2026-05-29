@@ -1,0 +1,782 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>LegalBridge — Get Started</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#04060a;
+  --surface:#0a0f1e;
+  --surface2:#0f1628;
+  --border:rgba(255,255,255,0.08);
+  --accent:#4a8ef5;
+  --accent2:#f4c146;
+  --text:#e8edf5;
+  --text2:rgba(232,237,245,0.55);
+  --text3:rgba(232,237,245,0.3);
+  --green:#2ecc71;
+  --red:#e74c3c;
+  --serif:'DM Serif Display',Georgia,serif;
+  --sans:'DM Sans',system-ui,sans-serif;
+  --mono:'DM Mono',monospace;
+  --radius:14px;
+}
+html,body{min-height:100vh;background:var(--bg);color:var(--text);font-family:var(--sans);font-size:15px;line-height:1.6;overflow-x:hidden}
+
+/* Background */
+body::before{
+  content:'';position:fixed;inset:0;
+  background:radial-gradient(ellipse at 30% 20%, rgba(74,142,245,0.08) 0%, transparent 60%),
+             radial-gradient(ellipse at 80% 80%, rgba(244,193,70,0.05) 0%, transparent 50%);
+  pointer-events:none;z-index:0;
+}
+
+/* ── LAYOUT ── */
+.page{
+  min-height:100vh;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;
+  padding:24px 20px;position:relative;z-index:1;
+}
+
+/* ── LOGO ── */
+.logo{
+  font-family:var(--serif);font-size:26px;
+  color:#fff;margin-bottom:32px;text-align:center;
+}
+.logo em{font-style:italic;color:var(--accent)}
+
+/* ── CARD ── */
+.card{
+  width:100%;max-width:420px;
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:20px;
+  padding:28px 24px;
+  box-shadow:0 24px 64px rgba(0,0,0,0.4);
+}
+
+/* ── PROGRESS ── */
+.progress{
+  display:flex;align-items:center;gap:6px;
+  margin-bottom:28px;
+}
+.prog-step{
+  flex:1;height:3px;border-radius:2px;
+  background:rgba(255,255,255,0.08);
+  transition:background 0.3s;
+}
+.prog-step.done{background:var(--accent)}
+.prog-step.active{background:rgba(74,142,245,0.5)}
+.prog-label{
+  font-size:11px;font-family:var(--mono);
+  color:var(--text3);letter-spacing:0.08em;
+  text-transform:uppercase;margin-bottom:6px;
+}
+
+/* ── STEP TITLES ── */
+.step-title{font-family:var(--serif);font-size:22px;margin-bottom:4px}
+.step-sub{font-size:13px;color:var(--text2);margin-bottom:22px}
+
+/* ── INPUTS ── */
+.field{margin-bottom:16px}
+.field label{
+  display:block;font-size:12px;font-family:var(--mono);
+  color:var(--text3);letter-spacing:0.06em;text-transform:uppercase;
+  margin-bottom:6px;
+}
+.field input,.field select,.field textarea{
+  width:100%;background:var(--surface2);
+  border:1px solid var(--border);border-radius:10px;
+  padding:12px 14px;color:var(--text);font-size:14px;
+  font-family:var(--sans);outline:none;transition:border-color 0.2s;
+  -webkit-appearance:none;appearance:none;
+}
+.field select{
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='rgba(255,255,255,0.3)' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 14px center;
+  padding-right:36px;cursor:pointer;
+}
+.field select option{background:#0f1628;color:#e8edf5}
+.field textarea{min-height:90px;resize:vertical;line-height:1.6}
+.field input:focus,.field select:focus,.field textarea:focus{border-color:rgba(74,142,245,0.5)}
+.field input::placeholder,.field textarea::placeholder{color:var(--text3)}
+
+/* ── USER TYPE CARDS ── */
+.type-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:6px}
+.type-card{
+  padding:14px 12px;border-radius:12px;
+  border:1.5px solid var(--border);background:var(--surface2);
+  cursor:pointer;text-align:center;transition:all 0.2s;
+  display:flex;flex-direction:column;align-items:center;gap:6px;
+}
+.type-card:hover{border-color:rgba(74,142,245,0.3)}
+.type-card.selected{
+  border-color:var(--accent);
+  background:rgba(74,142,245,0.1);
+}
+.type-icon{font-size:24px}
+.type-label{font-size:13px;font-weight:500;color:var(--text)}
+.type-desc{font-size:11px;color:var(--text3);line-height:1.4}
+
+/* ── SPECIALIZATION TAGS ── */
+.tag-grid{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:6px}
+.spec-tag{
+  padding:7px 13px;border-radius:20px;font-size:12px;
+  border:1px solid var(--border);background:var(--surface2);
+  cursor:pointer;transition:all 0.2s;color:var(--text2);
+  font-family:var(--mono);
+}
+.spec-tag:hover{border-color:rgba(74,142,245,0.3);color:var(--accent)}
+.spec-tag.selected{
+  background:rgba(74,142,245,0.12);
+  border-color:rgba(74,142,245,0.4);
+  color:var(--accent);
+}
+
+/* ── BUTTONS ── */
+.btn-primary{
+  width:100%;padding:14px;background:var(--accent);
+  border:none;border-radius:12px;color:#fff;
+  font-size:15px;font-weight:600;cursor:pointer;
+  font-family:var(--sans);transition:all 0.2s;
+  margin-top:6px;
+}
+.btn-primary:hover{background:#3a7ee5;transform:translateY(-1px)}
+.btn-primary:disabled{background:rgba(74,142,245,0.3);cursor:not-allowed;transform:none}
+.btn-back{
+  width:100%;padding:12px;background:none;
+  border:1px solid var(--border);border-radius:12px;
+  color:var(--text2);font-size:14px;cursor:pointer;
+  font-family:var(--sans);transition:all 0.2s;margin-top:10px;
+}
+.btn-back:hover{border-color:rgba(255,255,255,0.2);color:#fff}
+
+/* ── AUTH TOGGLE ── */
+.auth-toggle{
+  text-align:center;margin-top:20px;
+  font-size:13px;color:var(--text3);
+}
+.auth-toggle a{color:var(--accent);text-decoration:none;font-weight:500}
+
+/* ── ERROR ── */
+.error-msg{
+  background:rgba(231,76,60,0.1);border:1px solid rgba(231,76,60,0.2);
+  border-radius:10px;padding:10px 14px;font-size:13px;
+  color:#f87171;margin-bottom:14px;display:none;
+}
+
+/* ── SUCCESS ── */
+.success-screen{text-align:center;padding:20px 0}
+.success-icon{font-size:52px;margin-bottom:16px}
+.success-title{font-family:var(--serif);font-size:24px;margin-bottom:8px}
+.success-sub{color:var(--text2);font-size:14px;line-height:1.6;margin-bottom:24px}
+
+/* ── DIVIDER ── */
+.divider{
+  display:flex;align-items:center;gap:12px;
+  margin:20px 0;color:var(--text3);font-size:12px;
+}
+.divider::before,.divider::after{
+  content:'';flex:1;height:1px;background:var(--border);
+}
+
+/* ── STEP VISIBILITY ── */
+.step{display:none}
+.step.active{display:block}
+
+/* ── EXTRA FIELDS (conditional) ── */
+.extra-fields{display:none}
+.extra-fields.show{display:block}
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="logo">Legal<em>Bridge</em></div>
+
+  <div class="card">
+    <div class="error-msg" id="errorMsg"></div>
+
+    <!-- LOGIN VIEW -->
+    <div class="step active" id="viewLogin">
+      <div class="step-title">Welcome back</div>
+      <div class="step-sub">Sign in to your LegalBridge account</div>
+
+      <div class="field">
+        <label>Email</label>
+        <input type="email" id="loginEmail" placeholder="you@example.com"/>
+      </div>
+      <div class="field">
+        <label>Password</label>
+        <input type="password" id="loginPassword" placeholder="Your password"/>
+      </div>
+      <button class="btn-primary" onclick="doLogin()" id="loginBtn">Sign In</button>
+
+      <div style="text-align:center;margin-top:12px">
+        <a href="#" onclick="doForgotPassword()" style="color:var(--accent);font-size:13px;text-decoration:none;opacity:0.8">Forgot password?</a>
+      </div>
+
+      <div class="auth-toggle">
+        Don't have an account? <a href="#" onclick="switchTo('signup')">Create one</a>
+      </div>
+    </div>
+
+    <!-- SIGNUP: STEP 1 — Account -->
+    <div class="step" id="viewSignup1">
+      <div class="progress">
+        <div class="prog-step active" id="p1"></div>
+        <div class="prog-step" id="p2"></div>
+        <div class="prog-step" id="p3"></div>
+        <div class="prog-step" id="p4"></div>
+      </div>
+      <div class="prog-label">Step 1 of 4 — Account</div>
+      <div class="step-title">Create your account</div>
+      <div class="step-sub">Start your Nigerian legal AI journey</div>
+
+      <div class="field">
+        <label>Full Name</label>
+        <input type="text" id="s1Name" placeholder="e.g. Adaeze Okonkwo"/>
+      </div>
+      <div class="field">
+        <label>Email</label>
+        <input type="email" id="s1Email" placeholder="you@example.com"/>
+      </div>
+      <div class="field">
+        <label>Password</label>
+        <input type="password" id="s1Password" placeholder="Min. 8 characters"/>
+      </div>
+      <button class="btn-primary" onclick="goStep(2)">Continue →</button>
+
+      <div class="auth-toggle">
+        Already have an account? <a href="#" onclick="switchTo('login')">Sign in</a>
+      </div>
+    </div>
+
+    <!-- SIGNUP: STEP 2 — Who Are You -->
+    <div class="step" id="viewSignup2">
+      <div class="progress">
+        <div class="prog-step done"></div>
+        <div class="prog-step active"></div>
+        <div class="prog-step"></div>
+        <div class="prog-step"></div>
+      </div>
+      <div class="prog-label">Step 2 of 4 — Who Are You?</div>
+      <div class="step-title">Tell us about yourself</div>
+      <div class="step-sub">LegalBridge adapts its responses to who you are</div>
+
+      <div class="type-grid" id="typeGrid">
+        <div class="type-card" onclick="selectType('lawyer',this)">
+          <div class="type-icon">⚖️</div>
+          <div class="type-label">Lawyer</div>
+          <div class="type-desc">Licensed legal practitioner</div>
+        </div>
+        <div class="type-card" onclick="selectType('individual',this)">
+          <div class="type-icon">👤</div>
+          <div class="type-label">Individual</div>
+          <div class="type-desc">Personal legal matters</div>
+        </div>
+        <div class="type-card" onclick="selectType('student',this)">
+          <div class="type-icon">🎓</div>
+          <div class="type-label">Law Student</div>
+          <div class="type-desc">Academic legal research</div>
+        </div>
+        <div class="type-card" onclick="selectType('business',this)">
+          <div class="type-icon">🏢</div>
+          <div class="type-label">Business Owner</div>
+          <div class="type-desc">Corporate & commercial law</div>
+        </div>
+        <div class="type-card" onclick="selectType('journalist',this)">
+          <div class="type-icon">📰</div>
+          <div class="type-label">Journalist</div>
+          <div class="type-desc">Press freedom & FOI</div>
+        </div>
+        <div class="type-card" onclick="selectType('other',this)">
+          <div class="type-icon">🌐</div>
+          <div class="type-label">Other</div>
+          <div class="type-desc">General legal questions</div>
+        </div>
+      </div>
+
+      <button class="btn-primary" onclick="goStep(3)" id="step2Btn" disabled>Continue →</button>
+      <button class="btn-back" onclick="goStep(1)">← Back</button>
+    </div>
+
+    <!-- SIGNUP: STEP 3 — Your Details -->
+    <div class="step" id="viewSignup3">
+      <div class="progress">
+        <div class="prog-step done"></div>
+        <div class="prog-step done"></div>
+        <div class="prog-step active"></div>
+        <div class="prog-step"></div>
+      </div>
+      <div class="prog-label">Step 3 of 4 — Your Details</div>
+      <div class="step-title" id="step3Title">Your Details</div>
+      <div class="step-sub" id="step3Sub">Help us personalise your experience</div>
+
+      <!-- Common field -->
+      <div class="field">
+        <label>State</label>
+        <select id="s3State">
+          <option value="">Select your state</option>
+          <option>Abia</option><option>Adamawa</option><option>Akwa Ibom</option>
+          <option>Anambra</option><option>Bauchi</option><option>Bayelsa</option>
+          <option>Benue</option><option>Borno</option><option>Cross River</option>
+          <option>Delta</option><option>Ebonyi</option><option>Edo</option>
+          <option>Ekiti</option><option>Enugu</option><option>FCT — Abuja</option>
+          <option>Gombe</option><option>Imo</option><option>Jigawa</option>
+          <option>Kaduna</option><option>Kano</option><option>Katsina</option>
+          <option>Kebbi</option><option>Kogi</option><option>Kwara</option>
+          <option>Lagos</option><option>Nasarawa</option><option>Niger</option>
+          <option>Ogun</option><option>Ondo</option><option>Osun</option>
+          <option>Oyo</option><option>Plateau</option><option>Rivers</option>
+          <option>Sokoto</option><option>Taraba</option><option>Yobe</option>
+          <option>Zamfara</option>
+        </select>
+      </div>
+
+      <!-- LAWYER EXTRA -->
+      <div class="extra-fields" id="extraLawyer">
+        <div class="field">
+          <label>Years of Experience</label>
+          <select id="s3Experience">
+            <option value="">Select range</option>
+            <option>0–2 years (Newly called)</option>
+            <option>3–5 years</option>
+            <option>6–10 years</option>
+            <option>11–20 years</option>
+            <option>20+ years (Senior Advocate level)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Primary Court Level</label>
+          <select id="s3Court">
+            <option value="">Select court level</option>
+            <option>Magistrate Court</option>
+            <option>State High Court</option>
+            <option>Federal High Court</option>
+            <option>Court of Appeal</option>
+            <option>Supreme Court</option>
+            <option>Multiple levels</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Specialization (select all that apply)</label>
+          <div class="tag-grid" id="lawyerSpecs">
+            <div class="spec-tag" onclick="toggleSpec(this,'Criminal Law')">Criminal Law</div>
+            <div class="spec-tag" onclick="toggleSpec(this,'Land & Property')">Land & Property</div>
+            <div class="spec-tag" onclick="toggleSpec(this,'Corporate Law')">Corporate Law</div>
+            <div class="spec-tag" onclick="toggleSpec(this,'Family Law')">Family Law</div>
+            <div class="spec-tag" onclick="toggleSpec(this,'Human Rights')">Human Rights</div>
+            <div class="spec-tag" onclick="toggleSpec(this,'Employment Law')">Employment Law</div>
+            <div class="spec-tag" onclick="toggleSpec(this,'Tax Law')">Tax Law</div>
+            <div class="spec-tag" onclick="toggleSpec(this,'IP Law')">IP Law</div>
+            <div class="spec-tag" onclick="toggleSpec(this,'Electoral Law')">Electoral Law</div>
+            <div class="spec-tag" onclick="toggleSpec(this,'Oil & Gas')">Oil & Gas</div>
+            <div class="spec-tag" onclick="toggleSpec(this,'General Practice')">General Practice</div>
+          </div>
+        </div>
+        <div class="field">
+          <label>NBA Number (optional)</label>
+          <input type="text" id="s3NBA" placeholder="e.g. NBA/LAG/2015/001"/>
+        </div>
+      </div>
+
+      <!-- INDIVIDUAL EXTRA -->
+      <div class="extra-fields" id="extraIndividual">
+        <div class="field">
+          <label>Primary Legal Concern</label>
+          <select id="s3Concern">
+            <option value="">What brings you here?</option>
+            <option>Land / Property Dispute</option>
+            <option>Tenancy / Landlord Issues</option>
+            <option>Criminal Matter</option>
+            <option>Family / Divorce</option>
+            <option>Employment / Labour</option>
+            <option>Debt / Money Owed</option>
+            <option>Business / Contract</option>
+            <option>Police / Security Agencies</option>
+            <option>General Legal Knowledge</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- STUDENT EXTRA -->
+      <div class="extra-fields" id="extraStudent">
+        <div class="field">
+          <label>Institution</label>
+          <input type="text" id="s3School" placeholder="e.g. University of Lagos"/>
+        </div>
+        <div class="field">
+          <label>Year of Study</label>
+          <select id="s3Year">
+            <option value="">Select year</option>
+            <option>100 Level</option><option>200 Level</option>
+            <option>300 Level</option><option>400 Level</option>
+            <option>500 Level</option><option>Nigerian Law School</option>
+            <option>LLM / Postgraduate</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- BUSINESS EXTRA -->
+      <div class="extra-fields" id="extraBusiness">
+        <div class="field">
+          <label>Business Type</label>
+          <select id="s3BizType">
+            <option value="">Select type</option>
+            <option>Sole Proprietorship</option>
+            <option>Partnership</option>
+            <option>Limited Liability Company</option>
+            <option>NGO / Non-profit</option>
+            <option>Startup / Tech</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Primary Legal Concern</label>
+          <select id="s3BizConcern">
+            <option value="">What brings you here?</option>
+            <option>Company Registration (CAMA)</option>
+            <option>Contracts & Agreements</option>
+            <option>Employment / HR</option>
+            <option>Tax & Compliance</option>
+            <option>Intellectual Property</option>
+            <option>Debt Recovery</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- JOURNALIST EXTRA -->
+      <div class="extra-fields" id="extraJournalist">
+        <div class="field">
+          <label>Media Type</label>
+          <select id="s3Media">
+            <option value="">Select</option>
+            <option>Print / Online</option>
+            <option>Broadcast</option>
+            <option>Investigative</option>
+            <option>Freelance</option>
+          </select>
+        </div>
+      </div>
+
+      <button class="btn-primary" onclick="goStep(4)">Continue →</button>
+      <button class="btn-back" onclick="goStep(2)">← Back</button>
+    </div>
+
+    <!-- SIGNUP: STEP 4 — About You -->
+    <div class="step" id="viewSignup4">
+      <div class="progress">
+        <div class="prog-step done"></div>
+        <div class="prog-step done"></div>
+        <div class="prog-step done"></div>
+        <div class="prog-step active"></div>
+      </div>
+      <div class="prog-label">Step 4 of 4 — Almost Done!</div>
+      <div class="step-title">Brief about yourself</div>
+      <div class="step-sub">This helps LegalBridge give you sharper, more relevant responses</div>
+
+      <div class="field">
+        <label>In your own words (optional)</label>
+        <textarea id="s4Bio" placeholder="e.g. I'm a Lagos-based criminal defense lawyer focusing on EFCC prosecutions and fundamental rights enforcement at the High Court level..."></textarea>
+      </div>
+
+      <div class="field">
+        <label>How did you hear about LegalBridge?</label>
+        <select id="s4Source">
+          <option value="">Select (optional)</option>
+          <option>WhatsApp</option>
+          <option>Twitter / X</option>
+          <option>Facebook</option>
+          <option>A lawyer recommended it</option>
+          <option>Google Search</option>
+          <option>Friend / Colleague</option>
+          <option>Other</option>
+        </select>
+      </div>
+
+      <div style="margin-bottom:16px;padding:2px 0">
+        <label for="agreeCheck" style="display:flex!important;align-items:flex-start;gap:10px;cursor:pointer;font-family:var(--sans);text-transform:none!important;letter-spacing:0!important;font-size:13px;color:var(--text2);line-height:1.5">
+          <input type="checkbox" id="agreeCheck" style="margin-top:3px;accent-color:var(--accent);width:18px;height:18px;min-width:18px;flex-shrink:0;cursor:pointer"/>
+          <span>I agree to the <a href="terms.html" target="_blank" style="color:var(--accent);text-decoration:none">Terms of Service</a> and <a href="privacy.html" target="_blank" style="color:var(--accent);text-decoration:none">Privacy Policy</a> of DST Global Innovative Nigeria Ltd</span>
+        </label>
+      </div>
+      <button class="btn-primary" onclick="doSignup()" id="signupBtn">Create My Account →</button>
+      <button class="btn-back" onclick="goStep(3)">← Back</button>
+    </div>
+
+    <!-- SUCCESS -->
+    <div class="step" id="viewSuccess">
+      <div class="success-screen">
+        <div class="success-icon">⚖️</div>
+        <div class="success-title">Welcome to LegalBridge!</div>
+        <div class="success-sub">Your account is ready. LegalBridge now knows how to help you better based on your profile.</div>
+        <button class="btn-primary" onclick="window.location.href='chat.html'">Start My First Case →</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+const SUPABASE_URL = 'https://qcutjnsxiawnejiqwwix.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFjdXRqbnN4aWF3bmVqaXF3d2l4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk1MzQzMzEsImV4cCI6MjA5NTExMDMzMX0.DNo2BtvdBzUgdLQaBytHcYHaHtyjh-ftERDqPBCT3RQ';
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+let selectedType = '';
+let selectedSpecs = [];
+let currentStep = 'login';
+
+// ── NAVIGATION ──
+function switchTo(view) {
+  document.getElementById('viewLogin').classList.remove('active');
+  document.getElementById('viewSignup1').classList.remove('active');
+  if (view === 'login') {
+    document.getElementById('viewLogin').classList.add('active');
+  } else {
+    document.getElementById('viewSignup1').classList.add('active');
+  }
+  clearError();
+}
+
+function goStep(n) {
+  // Validate before advancing
+  if (n === 2) {
+    const name = document.getElementById('s1Name').value.trim();
+    const email = document.getElementById('s1Email').value.trim();
+    const pass = document.getElementById('s1Password').value;
+    if (!name) return showError('Please enter your full name');
+    if (!email || !email.includes('@')) return showError('Please enter a valid email');
+    if (pass.length < 8) return showError('Password must be at least 8 characters');
+  }
+  if (n === 3 && !selectedType) return showError('Please select who you are');
+  if (n === 4) {
+    const state = document.getElementById('s3State').value;
+    if (!state) return showError('Please select your state');
+  }
+
+  clearError();
+  // Hide all steps
+  ['viewSignup1','viewSignup2','viewSignup3','viewSignup4','viewSuccess'].forEach(id => {
+    document.getElementById(id).classList.remove('active');
+  });
+  document.getElementById('viewSignup' + n).classList.add('active');
+}
+
+// ── USER TYPE SELECTION ──
+function selectType(type, el) {
+  selectedType = type;
+  document.querySelectorAll('.type-card').forEach(c => c.classList.remove('selected'));
+  el.classList.add('selected');
+  document.getElementById('step2Btn').disabled = false;
+
+  // Update step 3 based on type
+  const titles = {
+    lawyer: 'Your Legal Practice',
+    individual: 'Your Situation',
+    student: 'Your Studies',
+    business: 'Your Business',
+    journalist: 'Your Work',
+    other: 'Your Details'
+  };
+  const subs = {
+    lawyer: 'LegalBridge will respond as your peer — technical, citation-first',
+    individual: 'LegalBridge will guide you in plain, clear English',
+    student: 'LegalBridge will use IRAC format and explain the law thoroughly',
+    business: 'LegalBridge will focus on corporate and commercial matters',
+    journalist: 'LegalBridge will focus on FOI, defamation, and press freedom',
+    other: 'LegalBridge will adapt to your needs'
+  };
+  document.getElementById('step3Title').textContent = titles[type] || 'Your Details';
+  document.getElementById('step3Sub').textContent = subs[type] || '';
+
+  // Show correct extra fields
+  ['extraLawyer','extraIndividual','extraStudent','extraBusiness','extraJournalist'].forEach(id => {
+    document.getElementById(id).classList.remove('show');
+  });
+  const map = {
+    lawyer:'extraLawyer', individual:'extraIndividual',
+    student:'extraStudent', business:'extraBusiness', journalist:'extraJournalist'
+  };
+  if (map[type]) document.getElementById(map[type]).classList.add('show');
+}
+
+// ── SPECIALIZATION TAGS ──
+function toggleSpec(el, spec) {
+  if (el.classList.contains('selected')) {
+    el.classList.remove('selected');
+    selectedSpecs = selectedSpecs.filter(s => s !== spec);
+  } else {
+    el.classList.add('selected');
+    selectedSpecs.push(spec);
+  }
+}
+
+// ── COLLECT PROFILE DATA ──
+function collectProfile() {
+  const base = {
+    user_type: selectedType,
+    state: document.getElementById('s3State').value,
+    bio: document.getElementById('s4Bio').value.trim(),
+    source: document.getElementById('s4Source').value
+  };
+  if (selectedType === 'lawyer') {
+    base.experience = document.getElementById('s3Experience').value;
+    base.court_level = document.getElementById('s3Court').value;
+    base.specializations = selectedSpecs;
+    base.nba_number = document.getElementById('s3NBA').value.trim();
+  } else if (selectedType === 'individual') {
+    base.primary_concern = document.getElementById('s3Concern').value;
+  } else if (selectedType === 'student') {
+    base.institution = document.getElementById('s3School').value.trim();
+    base.study_year = document.getElementById('s3Year').value;
+  } else if (selectedType === 'business') {
+    base.biz_type = document.getElementById('s3BizType').value;
+    base.primary_concern = document.getElementById('s3BizConcern').value;
+  } else if (selectedType === 'journalist') {
+    base.media_type = document.getElementById('s3Media').value;
+  }
+  return base;
+}
+
+// ── SIGN UP ──
+async function doSignup() {
+  const btn = document.getElementById('signupBtn');
+  btn.disabled = true;
+  btn.textContent = 'Creating account…';
+  clearError();
+
+  // Check agreement
+  if (!document.getElementById('agreeCheck').checked) {
+    showError('Please agree to the Terms of Service and Privacy Policy to continue');
+    btn.disabled = false;
+    btn.textContent = 'Create My Account →';
+    return;
+  }
+
+  const name = document.getElementById('s1Name').value.trim();
+  const email = document.getElementById('s1Email').value.trim();
+  const pass = document.getElementById('s1Password').value;
+  const profile = collectProfile();
+
+  try {
+    // 1. Create auth account
+    const { data, error } = await sb.auth.signUp({
+      email, password: pass,
+      options: { data: { full_name: name } }
+    });
+    if (error) throw error;
+
+    const userId = data.user?.id;
+    if (!userId) throw new Error('Signup failed — no user ID returned');
+
+    // 2. Save profile to Supabase profiles table
+    const { error: profileError } = await sb.from('profiles').insert({
+      id: userId,
+      full_name: name,
+      user_type: profile.user_type || null,
+      state: profile.state || null,
+      bio: profile.bio || null,
+      experience: profile.experience || null,
+      court_level: profile.court_level || null,
+      specializations: profile.specializations || [],
+      nba_number: profile.nba_number || null,
+      primary_concern: profile.primary_concern || null,
+      institution: profile.institution || null,
+      study_year: profile.study_year || null,
+      biz_type: profile.biz_type || null,
+      media_type: profile.media_type || null,
+      source: profile.source || null
+    });
+
+    if (profileError) {
+      console.error('Profile save error:', profileError);
+      // Don't block signup — just log it
+    }
+
+    // 3. Also save to localStorage as cache
+    localStorage.setItem('lb_profile', JSON.stringify({ ...profile, full_name: name }));
+
+    // 4. Show success
+    ['viewSignup1','viewSignup2','viewSignup3','viewSignup4'].forEach(id => {
+      document.getElementById(id).classList.remove('active');
+    });
+    document.getElementById('viewSuccess').classList.add('active');
+
+  } catch(e) {
+    showError(e.message || 'Signup failed. Please try again.');
+    btn.disabled = false;
+    btn.textContent = 'Create My Account →';
+  }
+}
+
+// ── FORGOT PASSWORD ──
+async function doForgotPassword() {
+  const email = document.getElementById('loginEmail').value.trim();
+  if (!email) {
+    return showError('Enter your email address first, then click Forgot password.');
+  }
+  try {
+    const { error } = await sb.auth.resetPasswordForEmail(email, {
+      redirectTo: 'https://legalbridge.ng/login.html'
+    });
+    if (error) throw error;
+    showError('✅ Password reset email sent! Check your inbox.');
+    document.getElementById('errorMsg').style.color = 'var(--green)';
+  } catch(e) {
+    showError(e.message || 'Failed to send reset email.');
+  }
+}
+
+// ── LOGIN ──
+async function doLogin() {
+  const btn = document.getElementById('loginBtn');
+  btn.disabled = true;
+  btn.textContent = 'Signing in…';
+  clearError();
+
+  const email = document.getElementById('loginEmail').value.trim();
+  const pass = document.getElementById('loginPassword').value;
+
+  try {
+    const { error } = await sb.auth.signInWithPassword({ email, password: pass });
+    if (error) throw error;
+    window.location.href = 'chat.html';
+  } catch(e) {
+    showError(e.message || 'Login failed. Check your email and password.');
+    btn.disabled = false;
+    btn.textContent = 'Sign In';
+  }
+}
+
+// ── HELPERS ──
+function showError(msg) {
+  const el = document.getElementById('errorMsg');
+  el.textContent = msg;
+  el.style.display = 'block';
+}
+function clearError() {
+  const el = document.getElementById('errorMsg');
+  el.style.display = 'none';
+  el.textContent = '';
+}
+
+// Check if already logged in
+sb.auth.getSession().then(({ data: { session } }) => {
+  if (session) window.location.href = 'chat.html';
+});
+</script>
+
+<div style="text-align:center;padding:20px;position:relative;z-index:1">
+  <span style="font-size:12px;color:rgba(232,237,245,0.2);font-family:'DM Mono',monospace">
+    <a href="privacy.html" style="color:rgba(74,142,245,0.5);text-decoration:none">Privacy Policy</a>
+    &nbsp;·&nbsp;
+    <a href="terms.html" style="color:rgba(74,142,245,0.5);text-decoration:none">Terms of Service</a>
+    &nbsp;·&nbsp;
+    DST Global Innovative Nigeria Ltd
+  </span>
+</div>
+</body>
+</html>
