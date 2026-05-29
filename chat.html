@@ -2675,6 +2675,9 @@ async function send() {
           _sDiv.innerHTML = '<div style="color:var(--accent);font-style:italic;padding:8px 0">📄 Drafting your legal document...</div>';
         }
 
+        // Track if the AI is asking for more details rather than generating
+        let _needDetails = false;
+
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
@@ -2689,7 +2692,18 @@ async function send() {
               const ssj = JSON.parse(ssData);
               if (ssj.text) {
                 parsedText += ssj.text;
-                if (!isDocument) { _sDiv.innerHTML = mdToHtml(parsedText); scrollDown(); }
+                // Detect details-request response (set on first chunk)
+                if (!_needDetails && parsedText.trimStart().startsWith('NEED_DETAILS:')) {
+                  _needDetails = true;
+                }
+                if (!isDocument || _needDetails) {
+                  // Stream as regular chat text (strip the prefix)
+                  const display = _needDetails
+                    ? parsedText.replace(/^NEED_DETAILS:\s*/i, '')
+                    : parsedText;
+                  _sDiv.innerHTML = mdToHtml(display);
+                  scrollDown();
+                }
               }
             } catch {}
           }
@@ -2697,9 +2711,24 @@ async function send() {
 
         reply = parsedText;
 
-        // Hoist docTitleClean so saveTurn can use it below
-        const docTitle = isDocument ? text.replace(/^(draft|prepare|write|generate)\s+(a\s+|an\s+)?/i, '').slice(0, 50) || 'Legal Document' : '';
-        const docTitleClean = docTitle ? docTitle.charAt(0).toUpperCase() + docTitle.slice(1) : '';
+        // ── NEED_DETAILS branch — treat as conversational, no viewer ──
+        if (_needDetails) {
+          const cleaned = reply.replace(/^NEED_DETAILS:\s*/i, '').trim();
+          _sDiv.innerHTML = mdToHtml(cleaned) + _ACTIONS;
+          scrollDown();
+          history.push({ role: 'assistant', content: cleaned });
+          saveTurn(text, cleaned).catch(() => {});
+          busy = false;
+          document.getElementById('sendBtn').disabled = false;
+          return;
+        }
+
+        // Derive doc type label from user message for title fallback
+        const _rawDocType = text.replace(/^(draft|prepare|write|generate)\s+(a\s+|an\s+)?/i, '').trim();
+        const _docTypeFallback = _rawDocType.charAt(0).toUpperCase() + _rawDocType.slice(1, 50);
+
+        // Smart title: parse real party names from the generated document
+        const docTitleClean = extractDocTitle(parsedText, _docTypeFallback);
 
         if (isDocument && parsedText) {
           // Open A4 viewer immediately
@@ -2941,6 +2970,54 @@ function getDocType(title) {
 function formatDocDate(dateStr) {
   const d = new Date(dateStr);
   return d.toLocaleDateString('en-NG', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+// ── SMART TITLE EXTRACTION ──
+// Parses the generated document to find real party names.
+// Falls back to the docType string if no names found.
+function extractDocTitle(content, fallbackType) {
+  const type = (fallbackType || 'Legal Document').trim();
+  if (!content) return type;
+  // Scan first 3000 chars for patterns
+  const t = content.slice(0, 3000);
+
+  // Helper: clean extracted name (remove trailing junk, trim)
+  const clean = s => s.replace(/\s*\(.*?\)/g, '').replace(/\s*\[.*?\]/g, '').trim().replace(/[,;]+$/, '').slice(0, 40);
+
+  // 1. Affidavit "I, Full Name," or "I, Full Name ("
+  const affMatch = t.match(/\bI,\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3})\s*[,(]/);
+  if (affMatch) return `Affidavit of ${clean(affMatch[1])}`;
+
+  // 2. BETWEEN: PARTY1 (description) AND PARTY2 — most agreements/deeds
+  const btwnMatch = t.match(/BETWEEN[:\s]+([A-Z][A-Za-z\s]{2,38}?)(?:\s*\([^)]*\))?\s+AND\s+([A-Z][A-Za-z\s]{2,38}?)(?:\s*\(|\s*$|\n)/m);
+  if (btwnMatch) {
+    const p1 = clean(btwnMatch[1]), p2 = clean(btwnMatch[2]);
+    if (p1 && p2 && !p1.includes('[') && !p2.includes('[')) return `${type} – ${p1} & ${p2}`;
+  }
+
+  // 3. "THIS [X] made ... between PARTY1 and PARTY2"
+  const thisMatch = t.match(/THIS\s+[\w\s]+?\s+(?:is made|made|entered into)[^.]*?between\s+([A-Z][A-Za-z\s]{2,38}?)\s+(?:and|AND)\s+([A-Z][A-Za-z\s]{2,38}?)(?:\s*[\(,\n.]|$)/i);
+  if (thisMatch) {
+    const p1 = clean(thisMatch[1]), p2 = clean(thisMatch[2]);
+    if (p1 && p2 && !p1.includes('[') && !p2.includes('[')) return `${type} – ${p1} & ${p2}`;
+  }
+
+  // 4. Employer / Employee pattern (employment contracts)
+  const empMatch = t.match(/Employer[:\s]+([A-Z][A-Za-z\s]{2,35}?)(?:\s*\(|\n|,)/i);
+  const eeMatch  = t.match(/Employee[:\s]+([A-Z][A-Za-z\s]{2,35}?)(?:\s*\(|\n|,)/i);
+  if (empMatch && eeMatch) {
+    const p1 = clean(empMatch[1]), p2 = clean(eeMatch[1]);
+    if (!p1.includes('[') && !p2.includes('[')) return `${type} – ${p1} & ${p2}`;
+  }
+
+  // 5. First # heading (document title set by Claude)
+  const heading = t.match(/^#{1,2}\s+(.+)$/m);
+  if (heading) {
+    const h = heading[1].replace(/\*\*/g, '').trim();
+    if (h.length <= 80 && !h.includes('[') && !h.toLowerCase().startsWith('legal document')) return h;
+  }
+
+  return type; // fallback
 }
 
 async function openSavedDoc(docId) {
@@ -4017,6 +4094,7 @@ async function startDocumentFlow(docType) {
       const dReader = res.body.getReader();
       const dDecoder = new TextDecoder();
       let dBuffer = '';
+      let _dNeedDetails = false;
       while (true) {
         const { done, value } = await dReader.read();
         if (done) break;
@@ -4027,12 +4105,35 @@ async function startDocumentFlow(docType) {
           if (!dLine.startsWith('data: ')) continue;
           const dData = dLine.slice(6).trim();
           if (dData === '[DONE]') continue;
-          try { const dj = JSON.parse(dData); if (dj.text) { reply += dj.text; } } catch {}
+          try {
+            const dj = JSON.parse(dData);
+            if (dj.text) {
+              reply += dj.text;
+              if (!_dNeedDetails && reply.trimStart().startsWith('NEED_DETAILS:')) {
+                _dNeedDetails = true;
+              }
+              if (_dNeedDetails) {
+                _dDiv.innerHTML = mdToHtml(reply.replace(/^NEED_DETAILS:\s*/i, ''));
+                scrollDown();
+              }
+            }
+          } catch {}
         }
       }
 
+      // ── NEED_DETAILS branch ──
+      if (_dNeedDetails && reply) {
+        const cleaned = reply.replace(/^NEED_DETAILS:\s*/i, '').trim();
+        _dDiv.innerHTML = mdToHtml(cleaned);
+        history.push({ role: 'assistant', content: cleaned });
+        saveTurn(userMsg, cleaned).catch(() => {});
+        return; // finally{} will re-enable the button
+      }
+
       if (reply) {
-        const docTitle = docType.charAt(0).toUpperCase() + docType.slice(1);
+        // Smart title — extract real party names from document
+        const _docTypeFallback = docType.charAt(0).toUpperCase() + docType.slice(1);
+        const docTitle = extractDocTitle(reply, _docTypeFallback);
 
         // Open A4 viewer immediately
         openDocViewer(reply, reply, docTitle);
