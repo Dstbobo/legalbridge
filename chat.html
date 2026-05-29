@@ -2624,8 +2624,12 @@ async function send() {
         })
       });
       // ── CHECK IF STREAMING ──
-      const isStream = res.headers.get('X-Stream') === '1';
-      const intentType = res.headers.get('X-Intent') || 'conversational';
+      // X-Stream/X-Intent are custom headers — only readable if server sends
+      // Access-Control-Expose-Headers. Content-Type is always safe to read.
+      const isStream = res.headers.get('X-Stream') === '1'
+        || (res.headers.get('Content-Type') || '').includes('event-stream');
+      const intentType = res.headers.get('X-Intent')
+        || (/\b(draft|prepare|write|generate)\b.{0,40}\b(affidavit|agreement|contract|deed|petition|motion|writ|notice|memo|memorandum|tenancy|employment|divorce|letter of demand|power of attorney)\b/i.test(text) ? 'documents' : 'conversational');
       const isDocument = intentType === 'documents';
 
       const _ACTIONS = '<div class="msg-actions">'
