@@ -2705,7 +2705,7 @@ async function send() {
           // Open A4 viewer immediately
           openDocViewer(parsedText, parsedText, docTitleClean);
 
-          // Compact card — unique ID so we can update status after save
+          // Show compact card with "Saving…" status
           const _cardId = 'dc' + Date.now();
           _sDiv.innerHTML = '<div id="' + _cardId + '" style="display:flex;align-items:center;gap:12px;padding:12px 14px;background:var(--surface-2);border:1px solid var(--border);border-radius:10px">'
             + '<span style="font-size:22px;flex-shrink:0">📄</span>'
@@ -2716,20 +2716,32 @@ async function send() {
             + _ACTIONS;
 
           scrollDown();
+          // Full content in history so AI has context for follow-up questions
           history.push({ role: 'assistant', content: reply });
 
-          // saveTurn first — creates chat record so currentChatId is set
-          // Use actual user message (text), not the derived title
-          await saveTurn(text, reply).catch(() => {});
+          // STEP 1: Ensure chat record exists — sets currentChatId reliably
+          await ensureChatExists(text);
 
-          // Now save document with correct currentChatId
-          const saved = await saveDocumentToLibrary(docTitleClean, parsedText);
+          // STEP 2: Save document to library (chat_id is now guaranteed set)
+          const savedDoc = await saveDocumentToLibrary(docTitleClean, parsedText);
 
-          // Update card status
+          // STEP 3: Save messages — store compact marker instead of full doc text
+          // so that on reload we can look up the doc by ID directly (no fragile comparison)
+          const assistantMarker = savedDoc
+            ? '__DOC__:' + savedDoc.id + ':' + docTitleClean
+            : parsedText; // fallback: store full text if save failed
+          await sb.from('messages').insert([
+            { chat_id: currentChatId, role: 'user',      content: text },
+            { chat_id: currentChatId, role: 'assistant', content: assistantMarker }
+          ]).catch(e => console.error('Message insert error:', e));
+          await sb.from('chats').update({ updated_at: new Date().toISOString() })
+            .eq('id', currentChatId).catch(() => {});
+
+          // Update card: show Saved or error
           const statusEl = document.querySelector('#' + _cardId + ' .doc-save-status');
-          if (statusEl) statusEl.innerHTML = saved
+          if (statusEl) statusEl.innerHTML = savedDoc
             ? '✓ Saved to Documents · <span style="color:var(--accent)">Viewing now</span>'
-            : '<span style="color:#e8908a">⚠ Save failed — check connection</span>';
+            : '<span style="color:#e8908a">⚠ Save failed — tap Reopen to retry</span>';
 
           busy = false;
           document.getElementById('sendBtn').disabled = false;
@@ -3990,14 +4002,27 @@ async function startDocumentFlow(docType) {
         scrollDown();
         history.push({ role: 'assistant', content: reply });
 
-        // saveTurn first so currentChatId is set before saving the document
-        await saveTurn(docTitle, reply).catch(() => {});
-        const saved = await saveDocumentToLibrary(docTitle, reply);
+        // STEP 1: Ensure chat exists
+        await ensureChatExists(userMsg);
+
+        // STEP 2: Save document
+        const savedDoc = await saveDocumentToLibrary(docTitle, reply);
+
+        // STEP 3: Save messages with compact marker
+        const assistantMarker = savedDoc
+          ? '__DOC__:' + savedDoc.id + ':' + docTitle
+          : reply;
+        await sb.from('messages').insert([
+          { chat_id: currentChatId, role: 'user',      content: userMsg },
+          { chat_id: currentChatId, role: 'assistant', content: assistantMarker }
+        ]).catch(e => console.error('Message insert error:', e));
+        await sb.from('chats').update({ updated_at: new Date().toISOString() })
+          .eq('id', currentChatId).catch(() => {});
 
         const statusEl = document.querySelector('#' + _cardId + ' .doc-save-status');
-        if (statusEl) statusEl.innerHTML = saved
+        if (statusEl) statusEl.innerHTML = savedDoc
           ? '✓ Saved to Documents · <span style="color:var(--accent)">Viewing now</span>'
-          : '<span style="color:#e8908a">⚠ Save failed — check connection</span>';
+          : '<span style="color:#e8908a">⚠ Save failed — tap Reopen to retry</span>';
 
       } else {
         _dDiv.innerHTML = '<p style="color:#e8908a">⚠ Document generation failed. Please try again.</p>';
@@ -4203,6 +4228,30 @@ async function loadChats() {
   }).join('');
 }
 
+// Creates the chat record if needed and returns the chatId.
+// Call this BEFORE saving documents so chat_id is always set.
+async function ensureChatExists(firstUserMsg) {
+  if (!currentUser) return null;
+  if (currentChatId) return currentChatId;
+  if (savingChat) {
+    for (let i = 0; i < 20 && !currentChatId; i++) {
+      await new Promise(r => setTimeout(r, 100));
+    }
+    if (currentChatId) return currentChatId;
+  }
+  savingChat = true;
+  const title = (firstUserMsg || 'Legal Document').slice(0, 55);
+  const { data: chat, error } = await sb
+    .from('chats')
+    .insert({ user_id: currentUser.id, title, updated_at: new Date().toISOString() })
+    .select().single();
+  savingChat = false;
+  if (error || !chat) { console.error('ensureChatExists error:', error); return null; }
+  currentChatId = chat.id;
+  await loadChats();
+  return currentChatId;
+}
+
 async function saveTurn(userMsg, aiReply) {
   if (!currentUser) return;
 
@@ -4275,39 +4324,49 @@ async function openChat(chatId, title, el) {
   const ws = document.getElementById('welcomeState');
   if (ws) ws.remove();
 
-  // Fetch saved documents for this chat so we can restore the A4 card
+  // Also fetch docs for this chat — used as fallback for old-format saves
   let chatDocs = [];
   try {
     const { data: docsData } = await sb
       .from('generated_documents')
       .select('id, title, content')
-      .eq('chat_id', chatId)
-      .order('created_at', { ascending: true });
+      .eq('chat_id', chatId);
     if (docsData) chatDocs = docsData;
   } catch (_) {}
+
+  // Helper: render a document card row
+  function renderDocRow(docId, docTitle) {
+    const row = document.createElement('div');
+    row.className = 'msg-row ai-row';
+    row.innerHTML = '<div class="msg-avatar" style="display:none"></div>'
+      + '<div class="msg-body"><div class="ai-content">'
+      + '<div style="display:flex;align-items:center;gap:12px;padding:12px 14px;background:var(--surface-2);border:1px solid var(--border);border-radius:10px">'
+      + '<span style="font-size:22px;flex-shrink:0">📄</span>'
+      + '<div style="flex:1;min-width:0">'
+      + '<div style="font-size:13px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + (docTitle || 'Legal Document') + '</div>'
+      + '<div style="font-size:12px;color:var(--text-muted);margin-top:2px">✓ Saved to Documents</div>'
+      + '</div>'
+      + '<button onclick="openSavedDoc(\'' + docId + '\')" style="background:var(--accent);color:#fff;border:none;padding:7px 14px;border-radius:7px;cursor:pointer;font-size:12px;font-weight:600;flex-shrink:0">↗ Open</button>'
+      + '</div>'
+      + '</div></div>';
+    document.getElementById('messagesInner').appendChild(row);
+  }
 
   for (const m of msgs) {
     if (m.role === 'user') {
       addUser(m.content);
+    } else if (m.content.startsWith('__DOC__:')) {
+      // New format: __DOC__:uuid:Title — parse directly, no DB comparison needed
+      const rest = m.content.slice(8);
+      const sep = rest.indexOf(':');
+      const docId    = sep >= 0 ? rest.slice(0, sep) : rest;
+      const docTitle = sep >= 0 ? rest.slice(sep + 1) : 'Legal Document';
+      renderDocRow(docId, docTitle);
     } else {
-      // Check if this assistant message is a saved document
+      // Old format fallback: compare content against saved docs
       const matchedDoc = chatDocs.find(d => d.content === m.content);
       if (matchedDoc) {
-        // Restore as compact card with A4 Reopen button
-        const row = document.createElement('div');
-        row.className = 'msg-row ai-row';
-        row.innerHTML = '<div class="msg-avatar" style="display:none"></div>'
-          + '<div class="msg-body"><div class="ai-content">'
-          + '<div style="display:flex;align-items:center;gap:12px;padding:12px 14px;background:var(--surface-2);border:1px solid var(--border);border-radius:10px">'
-          + '<span style="font-size:22px;flex-shrink:0">📄</span>'
-          + '<div style="flex:1;min-width:0">'
-          + '<div style="font-size:13px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + (matchedDoc.title || 'Legal Document') + '</div>'
-          + '<div style="font-size:12px;color:var(--text-muted);margin-top:2px">✓ Saved to Documents</div>'
-          + '</div>'
-          + '<button onclick="openSavedDoc(\'' + matchedDoc.id + '\')" style="background:var(--accent);color:#fff;border:none;padding:7px 14px;border-radius:7px;cursor:pointer;font-size:12px;font-weight:600;flex-shrink:0">↗ Open</button>'
-          + '</div>'
-          + '</div></div>';
-        document.getElementById('messagesInner').appendChild(row);
+        renderDocRow(matchedDoc.id, matchedDoc.title);
       } else {
         const html = m.content.includes('<') ? m.content : mdToHtml(m.content);
         addAI(html);
