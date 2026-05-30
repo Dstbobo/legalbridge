@@ -2871,8 +2871,9 @@ async function send() {
           return;
         }
 
-        // Post-process: fill dates + strip AI disclaimers / casual sign-offs
-        parsedText = stripAIDisclaimers(fillDatePlaceholders(parsedText));
+        // Post-process: fill dates, fill name placeholders from user message,
+        // strip AI disclaimers / casual sign-offs / internal markers
+        parsedText = stripAIDisclaimers(fillNamePlaceholders(fillDatePlaceholders(parsedText), text));
         reply = parsedText;
 
         // Smart title based on user message + content (pure post-process)
@@ -3184,6 +3185,34 @@ function nigerianDate(d) {
   })(day);
   const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
   return `${day}${suffix} ${months[date.getMonth()]}, ${date.getFullYear()}`;
+}
+
+// Detect candidate person names in the user's message — used as a fallback
+// substitution when the AI leaves [APPLICANT'S NAME] etc. in the draft.
+function extractPersonNames(userMessage) {
+  if (!userMessage) return [];
+  const names = new Set();
+  const rx = /\b((?:Mr\.?|Mrs\.?|Miss|Ms\.?|Dr\.?|Hon\.?|Chief|Alhaji|Barr\.?|Prof\.?|Engr\.?)\s+)?([A-Z][a-z]{1,}\s+[A-Z][a-z]{1,}(?:\s+[A-Z][a-z]{1,})?)/g;
+  let m;
+  const skip = /^(Criminal Code|Penal Code|Police Station|High Court|Federal High|State High|Court of Appeal|Supreme Court|Magistrate Court|Area Command|Land Use|Evidence Act|Labour Act|Section|Lagos State|Rivers State|Kano State|Nasarawa State|FCT Abuja|Plot No|National Industrial)/;
+  while ((m = rx.exec(userMessage)) !== null) {
+    const full = ((m[1] || '') + m[2]).trim();
+    if (!skip.test(full)) names.add(full);
+  }
+  return [...names];
+}
+
+// If the AI leaves placeholder name brackets in the document but the user
+// provided a clear name, substitute the user's name in.
+function fillNamePlaceholders(text, userMessage) {
+  if (!text) return text;
+  const names = extractPersonNames(userMessage);
+  if (!names.length) return text;
+  const primary = names[0]; // first mentioned name = applicant/petitioner/party
+  return text.replace(
+    /\[\s*(?:APPLICANT|PETITIONER|DEPONENT|PLAINTIFF|CLAIMANT|RESPONDENT|DEFENDANT|PARTY|FULL\s+NAME|NAME)(?:'?S)?\s*(?:NAME)?\s*\]/gi,
+    primary
+  );
 }
 
 // Strip AI disclaimers and casual sign-offs that don't belong in formal documents.
@@ -4419,8 +4448,9 @@ async function startDocumentFlow(docType) {
       }
 
       if (reply) {
-        // Post-process: fill dates + strip AI disclaimers / casual sign-offs
-        reply = stripAIDisclaimers(fillDatePlaceholders(reply));
+        // Post-process: fill dates, fill name placeholders from user message,
+        // strip AI disclaimers / casual sign-offs / internal markers
+        reply = stripAIDisclaimers(fillNamePlaceholders(fillDatePlaceholders(reply), userMsg));
         // Smart title — pass the original user message
         const docTitle = extractDocTitle(reply, userMsg);
 

@@ -257,6 +257,57 @@ ${docTemplate}`;
       systemPrompt += `\n\n[CONVERSATION CONTEXT]\n${summary}\n[END CONTEXT]`;
     }
 
+    // ── DETERMINISTIC EXTRACTION HELPER ──
+    // Extract candidate proper-noun names + key facts from the user message and
+    // re-state them inside the system prompt as an explicit FACTS block. This
+    // forces the model to use the actual names rather than emitting placeholders
+    // like [APPLICANT'S NAME] when it gets distracted.
+    const facts: string[] = [];
+    // Person names — sequences of 2-3 capitalised words
+    const namesFound = new Set<string>();
+    const nameRx = /\b((?:Mr\.?|Mrs\.?|Miss|Ms\.?|Dr\.?|Hon\.?|Chief|Alhaji|Barr\.?|Prof\.?|Engr\.?)\s+)?([A-Z][a-z]{1,}\s+[A-Z][a-z]{1,}(?:\s+[A-Z][a-z]{1,})?)/g;
+    let nm;
+    while ((nm = nameRx.exec(lastMsg)) !== null) {
+      const full = (nm[1] || '') + nm[2];
+      // Skip common false positives
+      if (!/^(Criminal Code|Penal Code|Police Station|High Court|Federal High|State High|Court of Appeal|Supreme Court|Magistrate Court|Area Command|Land Use|Evidence Act|Labour Act|Section|Lagos State|Rivers State|Kano State|Nasarawa State|FCT Abuja)/.test(full)) {
+        namesFound.add(full.trim());
+      }
+    }
+    if (namesFound.size > 0) facts.push(`PERSON NAMES MENTIONED: ${[...namesFound].join(' | ')}`);
+
+    // Charges / sections of law
+    const chargeMatches = lastMsg.match(/\b(?:Section|Sec\.?|s\.?)\s*\d+[A-Z]?(?:\(\d+\))?(?:\s+of\s+the\s+[A-Z][\w\s]+?(?:Act|Code|Law|CFRN|Constitution))?/gi) || [];
+    if (chargeMatches.length) facts.push(`LAW/STATUTE REFERENCES: ${[...new Set(chargeMatches)].join(' | ')}`);
+
+    // Police station / location
+    const stationMatch = lastMsg.match(/\b([A-Z][\w\s]+?(?:Police Station|Area Command|Divisional Headquarters|Police Headquarters))\b/);
+    if (stationMatch) facts.push(`POLICE LOCATION: ${stationMatch[0]}`);
+
+    // Detention / duration ("held for 2 days", "detained for 3 weeks")
+    const detMatch = lastMsg.match(/\b(?:held|detained|in custody|locked up|remanded)\s+(?:for\s+)?(\d+\s+(?:day|days|week|weeks|month|months|hour|hours))/i);
+    if (detMatch) facts.push(`DETENTION DURATION: ${detMatch[1]}`);
+
+    // Courts mentioned
+    const courtMatch = lastMsg.match(/\b((?:High|Federal High|State High|Magistrate|Supreme|Customary|Sharia|National Industrial|Court of Appeal)\s+Court(?:\s+of\s+[A-Z][\w\s]+)?)/i);
+    if (courtMatch) facts.push(`COURT MENTIONED: ${courtMatch[1]}`);
+
+    // Amounts (₦, NGN, naira)
+    const amountMatch = lastMsg.match(/(?:₦|NGN\s*|N\s*)\s*[\d,]+(?:\.\d+)?(?:\s*(?:million|m|thousand|k|billion|b))?/gi);
+    if (amountMatch) facts.push(`AMOUNTS: ${[...new Set(amountMatch.map(a => a.trim()))].join(' | ')}`);
+
+    // Addresses (rough)
+    const addressMatch = lastMsg.match(/(?:Plot|No\.|Number)\s+[\w\s,-]+?(?:Street|Road|Avenue|Close|Crescent|Drive|Way|Estate|Lane|Boulevard)[\w\s,]*/gi);
+    if (addressMatch) facts.push(`ADDRESSES: ${[...new Set(addressMatch.map(a => a.trim()))].join(' | ')}`);
+
+    if (facts.length > 0) {
+      systemPrompt += `\n\n[FACTS PROVIDED BY USER — YOU MUST USE THESE EXACT VALUES IN THE DRAFT]\n`
+        + facts.map(f => '• ' + f).join('\n')
+        + `\n\nUse these EXACT names and details in the document. NEVER substitute them with [APPLICANT'S NAME], [PETITIONER'S NAME], [DEPONENT'S NAME], [NAME], or any other placeholder. The person named above is the Applicant/Petitioner/Deponent/Party — use their actual name in every field where that role appears.\n[END FACTS]\n\nUser's original request: "${lastMsg.slice(0, 600)}"`;
+    } else {
+      systemPrompt += `\n\nUser's original request: "${lastMsg.slice(0, 600)}"`;
+    }
+
     // Stream from Claude Sonnet with high token limit for long documents
     const { readable, writable } = new TransformStream();
     const writer = writable.getWriter();
@@ -274,6 +325,10 @@ ${docTemplate}`;
           body: JSON.stringify({
             model: 'claude-sonnet-4-5',
             max_tokens: 4096,
+            // Low temperature so name/charge/court extraction is DETERMINISTIC.
+            // High temp was causing the same prompt to extract "Emeka Nwosu"
+            // one time and emit [APPLICANT'S NAME] the next.
+            temperature: 0.2,
             stream: true,
             system: systemPrompt,
             messages: messages.map((m: any) => ({
