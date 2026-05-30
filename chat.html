@@ -1730,6 +1730,84 @@
   border-color: var(--accent);
 }
 
+/* ── DOCUMENT LIBRARY ── */
+#docLibraryOverlay {
+  display: none; position: fixed; inset: 0; z-index: 5000;
+  background: var(--bg); flex-direction: column; overflow: hidden;
+}
+#docLibraryOverlay.open { display: flex; }
+.lib-header {
+  display: flex; align-items: center; gap: 12px;
+  padding: 14px 20px; border-bottom: 1px solid var(--border);
+  flex-shrink: 0; background: var(--surface);
+}
+.lib-header h2 { font-size: 17px; font-weight: 700; flex: 1; margin: 0; }
+.lib-search {
+  padding: 8px 14px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--surface-2); color: var(--text); font-size: 13px; width: 220px;
+}
+.lib-search:focus { outline: none; border-color: var(--accent); }
+.lib-close-btn {
+  background: none; border: none; color: var(--text-muted); cursor: pointer;
+  font-size: 20px; padding: 4px 8px; border-radius: 6px;
+}
+.lib-close-btn:hover { color: var(--text); background: var(--surface-2); }
+.lib-body { display: flex; flex: 1; overflow: hidden; }
+.lib-sidebar {
+  width: 240px; flex-shrink: 0; border-right: 1px solid var(--border);
+  overflow-y: auto; padding: 8px 0; background: var(--surface);
+}
+.lib-cat-item {
+  display: flex; align-items: center; gap: 10px; padding: 10px 16px;
+  cursor: pointer; font-size: 13px; color: var(--text-muted);
+  border-left: 3px solid transparent; transition: all 0.15s;
+}
+.lib-cat-item:hover { background: var(--surface-2); color: var(--text); }
+.lib-cat-item.active {
+  background: rgba(74,142,245,0.1); color: var(--accent);
+  border-left-color: var(--accent); font-weight: 600;
+}
+.lib-cat-icon { font-size: 18px; width: 24px; text-align: center; flex-shrink: 0; }
+.lib-cat-count {
+  margin-left: auto; font-size: 11px; background: var(--surface-2);
+  padding: 1px 7px; border-radius: 10px; color: var(--text-muted);
+}
+.lib-content { flex: 1; overflow-y: auto; padding: 20px; }
+.lib-cat-title {
+  font-size: 18px; font-weight: 700; margin-bottom: 4px; color: var(--text);
+}
+.lib-cat-desc { font-size: 13px; color: var(--text-muted); margin-bottom: 20px; }
+.lib-docs-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+}
+.lib-doc-card {
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 10px; padding: 14px; cursor: pointer; transition: all 0.15s;
+}
+.lib-doc-card:hover { border-color: var(--accent); transform: translateY(-1px); }
+.lib-doc-name { font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
+.lib-doc-desc { font-size: 12px; color: var(--text-muted); margin-bottom: 10px; line-height: 1.5; }
+.lib-doc-generate {
+  display: inline-flex; align-items: center; gap: 5px;
+  background: var(--accent); color: #fff; border: none;
+  padding: 6px 12px; border-radius: 6px; font-size: 12px; font-weight: 600;
+  cursor: pointer; width: 100%; justify-content: center;
+}
+.lib-doc-generate:hover { opacity: 0.88; }
+.lib-featured-banner {
+  background: linear-gradient(135deg, #0f3460 0%, #1a5276 100%);
+  border-radius: 12px; padding: 20px 24px; margin-bottom: 20px;
+  border: 1px solid rgba(74,142,245,0.3); color: #fff;
+}
+@media (max-width: 640px) {
+  .lib-sidebar { width: 64px; }
+  .lib-cat-item span.lib-cat-name { display: none; }
+  .lib-cat-count { display: none; }
+  .lib-docs-grid { grid-template-columns: 1fr; }
+  .lib-search { width: 130px; }
+}
+
 </style>
   <script src="chat-api.js"></script>
   <script src="https://unpkg.com/docx@8.5.0/build/index.js"></script>
@@ -1752,27 +1830,39 @@
     </button>
 
     <div class="sidebar-nav">
-      <a class="sidebar-nav-item" href="lawyers.html">
+      <a class="sidebar-nav-item" data-roles="other,business,journalist" href="lawyers.html">
         <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4" stroke-width="1.8"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg>
         Find a Lawyer
       </a>
-      <a class="sidebar-nav-item" href="#profile" onclick="closeSidebar()">
+      <a class="sidebar-nav-item" data-roles="all" href="#profile" onclick="closeSidebar()">
         <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4" stroke-width="1.8"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M20 21a8 8 0 10-16 0"/></svg>
         My Profile
       </a>
-      <a class="sidebar-nav-item" href="#" onclick="closeSidebar()">
+      <a class="sidebar-nav-item" data-roles="all" href="#" onclick="closeSidebar()">
         <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
         My Cases
       </a>
-      <a class="sidebar-nav-item" href="javascript:void(0)" onclick="closeSidebar();openDocsPanel()">
+      <a class="sidebar-nav-item" data-roles="all" href="javascript:void(0)" onclick="closeSidebar();openDocLibrary()">
         <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8" stroke-width="1.8"/><line x1="16" y1="13" x2="8" y2="13" stroke-width="1.8"/><line x1="16" y1="17" x2="8" y2="17" stroke-width="1.8"/></svg>
         Documents
       </a>
-      <a class="sidebar-nav-item" href="#" onclick="closeSidebar()">
+      <a class="sidebar-nav-item" data-roles="all" href="javascript:void(0)" onclick="closeSidebar();openDocLibrary('registrations')">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-2 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/></svg>
+        Register My Business
+      </a>
+      <a class="sidebar-nav-item" data-roles="lawyer" href="javascript:void(0)" onclick="closeSidebar();fillPrompt('Help me manage my client matters. What would you like to know about client management for a Nigerian law practice?');setTimeout(()=>{const i=document.getElementById(\'chatInput\');if(i&&i.value.trim())send();},100)">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+        My Clients
+      </a>
+      <a class="sidebar-nav-item" data-roles="lawyer,student" href="javascript:void(0)" onclick="closeSidebar();openDocLibrary('research')">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/></svg>
+        Research Tools
+      </a>
+      <a class="sidebar-nav-item" data-roles="all" href="#" onclick="closeSidebar()">
         <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><circle cx="12" cy="12" r="3" stroke-width="1.8"/></svg>
         Settings
       </a>
-      <a class="sidebar-nav-item" onclick="showInstallPopup();closeSidebar()">
+      <a class="sidebar-nav-item" data-roles="all" onclick="showInstallPopup();closeSidebar()">
         <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
         Install App
       </a>
@@ -4290,6 +4380,357 @@ function printDoc() {
 // downloadDocPDF() is defined earlier — handles #docA4 content
 
 // ═══════════════════════════════════════════════════════
+// ROLE-BASED NAVIGATION
+// ═══════════════════════════════════════════════════════
+
+function applyRoleNav() {
+  const type = userProfile?.user_type || 'other';
+  document.querySelectorAll('[data-roles]').forEach(el => {
+    const roles = el.getAttribute('data-roles').split(',');
+    el.style.display = (roles.includes(type) || roles.includes('all')) ? '' : 'none';
+  });
+}
+
+// ═══════════════════════════════════════════════════════
+// DOCUMENT LIBRARY DATA
+// ═══════════════════════════════════════════════════════
+
+const DOCUMENT_LIBRARY = [
+  {
+    id: 'registrations', icon: '🏛️', name: 'Registrations & Compliance',
+    desc: 'CAC registration, TIN, SCUML, NAFDAC and all government filings',
+    roles: 'all', featured: true,
+    docs: [
+      { name: 'CAC Business Name Registration Guide', desc: 'Step-by-step guide to register a business name with CAC', prompt: 'Guide me through the CAC business name registration process in Nigeria with all requirements and fees' },
+      { name: 'CAC Limited Liability Company Registration', desc: 'Register a private limited company (Ltd) with CAC', prompt: 'Guide me through registering a private limited liability company with the CAC in Nigeria including all documentation required' },
+      { name: 'Business Name Search', desc: 'Verify name availability before registration', prompt: 'How do I conduct a business name search with the CAC to verify name availability before registration?' },
+      { name: 'TIN Application Guide', desc: 'Tax Identification Number application with FIRS', prompt: 'Walk me through the process of obtaining a Tax Identification Number (TIN) from FIRS in Nigeria' },
+      { name: 'SCUML Registration Guide', desc: 'Special Control Unit against Money Laundering registration', prompt: 'How do I register my business with SCUML? What businesses are required to register and what is the process?' },
+      { name: 'NAFDAC Registration Guide', desc: 'For food, drugs, cosmetics and regulated products', prompt: 'Guide me through the NAFDAC product registration process in Nigeria for a new product' },
+      { name: 'SON Certification Guide', desc: 'Standards Organisation of Nigeria product certification', prompt: 'How do I obtain SON certification for my product in Nigeria? What is the process and requirements?' },
+      { name: 'CAC Annual Returns Filing', desc: 'Annual compliance filing for registered companies', prompt: 'How do I file annual returns with the CAC in Nigeria? What are the deadlines and penalties for late filing?' },
+      { name: 'Company Seal & Share Certificate', desc: 'Post-incorporation documents', prompt: 'Draft a company share certificate and explain the requirements for a company seal in Nigeria under CAMA 2020' },
+      { name: 'CAC Change of Directors', desc: 'Notify CAC of director changes', prompt: 'How do I notify the CAC of a change of directors in a Nigerian company? What forms and procedures apply?' },
+      { name: 'Trademark Registration Guide', desc: 'Register your brand with the Trademarks Registry', prompt: 'Walk me through the trademark registration process in Nigeria — the registry, fees, timeline and requirements' },
+      { name: 'FIRS Tax Clearance Application', desc: 'Obtain tax clearance certificate from FIRS', prompt: 'How do I apply for a tax clearance certificate from FIRS in Nigeria? What are the requirements and timeline?' }
+    ]
+  },
+  {
+    id: 'affidavits', icon: '📋', name: 'Affidavits & Declarations',
+    desc: 'All types of sworn affidavits and statutory declarations',
+    roles: 'all',
+    docs: [
+      { name: 'General Affidavit', desc: 'All-purpose sworn statement before Commissioner for Oaths', prompt: 'Draft a general affidavit' },
+      { name: 'Affidavit of Loss', desc: 'Lost document or property sworn statement', prompt: 'Draft an affidavit of loss for a lost document' },
+      { name: 'Affidavit of Change of Name', desc: 'Formal name change declaration', prompt: 'Draft an affidavit of change of name' },
+      { name: 'Age Declaration Affidavit', desc: 'Declare correct age for official purposes', prompt: 'Draft an age declaration affidavit' },
+      { name: 'Affidavit of Next-of-Kin', desc: 'Identify next-of-kin for official purposes', prompt: 'Draft an affidavit of next-of-kin' },
+      { name: 'Affidavit of Identification', desc: 'Confirm identity for official purposes', prompt: 'Draft an affidavit of identification' },
+      { name: 'Affidavit of Means', desc: 'Declare financial means for court', prompt: 'Draft an affidavit of means' },
+      { name: 'Statutory Declaration', desc: 'Formal declaration under the Oaths Act', prompt: 'Draft a statutory declaration under the Nigerian Oaths Act' },
+      { name: 'Affidavit of Facts', desc: 'Sworn statement of specific facts in a matter', prompt: 'Draft an affidavit of facts for a court matter' },
+      { name: 'Affidavit in Support of Application', desc: 'Supporting affidavit for court application', prompt: 'Draft an affidavit in support of a court application' }
+    ]
+  },
+  {
+    id: 'property', icon: '🏠', name: 'Property & Land',
+    desc: 'Deeds, tenancy agreements, mortgages and land transactions',
+    roles: 'all',
+    docs: [
+      { name: 'Tenancy Agreement', desc: 'Residential or commercial tenancy agreement', prompt: 'Draft a tenancy agreement' },
+      { name: 'Deed of Assignment', desc: 'Transfer of property ownership', prompt: 'Draft a deed of assignment for land property' },
+      { name: 'Deed of Lease', desc: 'Long-term property lease agreement', prompt: 'Draft a deed of lease' },
+      { name: 'Deed of Mortgage', desc: 'Property mortgage by way of legal charge', prompt: 'Draft a deed of mortgage' },
+      { name: 'Deed of Gift', desc: 'Transfer property as a gift (no payment)', prompt: 'Draft a deed of gift for property' },
+      { name: 'Power of Attorney (Property)', desc: 'Authorise someone to handle your property', prompt: 'Draft a power of attorney for property transactions' },
+      { name: 'Notice to Quit', desc: 'Formal notice to vacate premises', prompt: 'Draft a notice to quit' },
+      { name: 'Statutory Notice of Intention to Recover Premises', desc: '7-day notice under tenancy law', prompt: 'Draft a 7-day statutory notice of intention to recover premises under Lagos Tenancy Law 2011' },
+      { name: 'Agreement for Sale of Land', desc: 'Contract for land purchase', prompt: 'Draft an agreement for sale of land' },
+      { name: 'Caution/Caveat Against Title', desc: 'Protect interest in land at Land Registry', prompt: 'Draft a caution or caveat against a land title at the Land Registry in Nigeria' }
+    ]
+  },
+  {
+    id: 'corporate', icon: '🏢', name: 'Corporate & Business',
+    desc: 'Company documents, shareholder agreements, resolutions',
+    roles: 'all',
+    docs: [
+      { name: 'Partnership Agreement', desc: 'Business partnership terms and profit sharing', prompt: 'Draft a partnership agreement' },
+      { name: 'Shareholders Agreement', desc: 'Rights and obligations of company shareholders', prompt: 'Draft a shareholders agreement' },
+      { name: 'Joint Venture Agreement', desc: 'Collaborative business arrangement', prompt: 'Draft a joint venture agreement' },
+      { name: 'Non-Disclosure Agreement (NDA)', desc: 'Protect confidential business information', prompt: 'Draft a non-disclosure agreement' },
+      { name: 'Memorandum of Understanding (MOU)', desc: 'Record understanding between parties', prompt: 'Draft a memorandum of understanding' },
+      { name: 'Board Resolution', desc: 'Formal company board decision record', prompt: 'Draft a board resolution for a Nigerian company' },
+      { name: 'Business Purchase Agreement', desc: 'Buy or sell a business or its assets', prompt: 'Draft a business purchase agreement' },
+      { name: 'Franchise Agreement', desc: 'Grant or receive franchise rights', prompt: 'Draft a franchise agreement under Nigerian law' },
+      { name: 'Agency Agreement', desc: 'Appoint an agent to act on your behalf', prompt: 'Draft an agency agreement' },
+      { name: 'Supply Agreement', desc: 'Terms for supply of goods or services', prompt: 'Draft a supply agreement' }
+    ]
+  },
+  {
+    id: 'employment', icon: '👔', name: 'Employment',
+    desc: 'Employment contracts, offer letters, HR documents',
+    roles: 'all',
+    docs: [
+      { name: 'Employment Contract', desc: 'Full employment agreement under Labour Act', prompt: 'Draft an employment contract' },
+      { name: 'Offer Letter / Letter of Appointment', desc: 'Formal job offer to a new employee', prompt: 'Draft an offer letter of appointment' },
+      { name: 'Termination Letter', desc: 'Formally end an employment relationship', prompt: 'Draft an employment termination letter' },
+      { name: 'Redundancy Letter', desc: 'Notify employee of redundancy', prompt: 'Draft a redundancy letter for an employee' },
+      { name: 'Non-Compete Agreement', desc: 'Restrict competition after employment', prompt: 'Draft a non-compete agreement for an employee' },
+      { name: 'Confidentiality Agreement', desc: 'Protect company secrets from employees', prompt: 'Draft an employee confidentiality agreement' },
+      { name: 'Consultancy Agreement', desc: 'Engage an independent consultant', prompt: 'Draft a consultancy agreement' },
+      { name: 'Internship Agreement', desc: 'Student or graduate internship terms', prompt: 'Draft an internship agreement' },
+      { name: 'Warning Letter', desc: 'Formal disciplinary warning to employee', prompt: 'Draft a formal warning letter to an employee' },
+      { name: 'Staff Handbook Policy', desc: 'Workplace rules and conduct policy', prompt: 'Draft a staff handbook conduct policy for a Nigerian company' }
+    ]
+  },
+  {
+    id: 'family', icon: '👨‍👩‍👧', name: 'Family & Matrimonial',
+    desc: 'Divorce, custody, maintenance and family agreements',
+    roles: 'all',
+    docs: [
+      { name: 'Divorce Petition', desc: 'Petition to dissolve a statutory marriage under MCA', prompt: 'Draft a divorce petition' },
+      { name: 'Child Custody Agreement', desc: 'Parenting arrangement after separation', prompt: 'Draft a child custody agreement' },
+      { name: 'Prenuptial Agreement', desc: 'Pre-marriage financial arrangement', prompt: 'Draft a prenuptial agreement under Nigerian law' },
+      { name: 'Maintenance Agreement', desc: 'Spousal or child support arrangement', prompt: 'Draft a maintenance agreement' },
+      { name: 'Deed of Separation', desc: 'Formal separation agreement for spouses', prompt: 'Draft a deed of separation' },
+      { name: 'Parenting Plan', desc: 'Detailed co-parenting arrangement', prompt: 'Draft a co-parenting plan' },
+      { name: 'Child Support Agreement', desc: 'Financial support arrangement for children', prompt: 'Draft a child support agreement' },
+      { name: 'Adoption Petition', desc: 'Petition for legal adoption of a child', prompt: 'Draft an adoption petition under the Child Rights Act 2003' }
+    ]
+  },
+  {
+    id: 'court', icon: '⚖️', name: 'Court Documents',
+    desc: 'Pleadings, motions, writs and litigation documents',
+    roles: 'all',
+    docs: [
+      { name: 'Writ of Summons', desc: 'Commence action in the High Court', prompt: 'Draft a writ of summons' },
+      { name: 'Statement of Claim', desc: 'Plaintiff\'s particulars of claim', prompt: 'Draft a statement of claim' },
+      { name: 'Statement of Defence', desc: 'Defendant\'s response to claim', prompt: 'Draft a statement of defence' },
+      { name: 'Motion on Notice', desc: 'Formal application to court with notice', prompt: 'Draft a motion on notice' },
+      { name: 'Ex Parte Application', desc: 'Urgent application without the other party', prompt: 'Draft an ex parte application' },
+      { name: 'Affidavit in Support of Motion', desc: 'Sworn facts supporting a court application', prompt: 'Draft an affidavit in support of a motion' },
+      { name: 'Written Address', desc: 'Legal argument submitted to court in writing', prompt: 'Draft a written address for court' },
+      { name: 'Notice of Appeal', desc: 'Appeal a court judgment', prompt: 'Draft a notice of appeal' },
+      { name: 'Originating Summons', desc: 'Start proceedings by originating summons', prompt: 'Draft an originating summons' },
+      { name: 'FREP Application', desc: 'Fundamental Rights Enforcement Procedure', prompt: 'Draft a fundamental rights enforcement application' }
+    ]
+  },
+  {
+    id: 'criminal', icon: '🔒', name: 'Criminal Law',
+    desc: 'Bail applications, criminal procedure documents',
+    roles: 'all',
+    docs: [
+      { name: 'Bail Application', desc: 'Apply for bail for a client in custody', prompt: 'Draft a bail application' },
+      { name: 'Bail Bond', desc: 'Undertaking by surety for accused\'s bail', prompt: 'Draft a bail bond' },
+      { name: 'Response to Police Station Bail', desc: 'Formal request for police station bail', prompt: 'Draft a letter requesting police station bail for a suspect' },
+      { name: 'Proof of Evidence', desc: 'Prosecution witness statements and exhibits', prompt: 'Draft a proof of evidence document for a criminal matter' },
+      { name: 'Plea Bargain Agreement', desc: 'Negotiated plea under ACJA 2015 s.270', prompt: 'Draft a plea bargain agreement under ACJA 2015' },
+      { name: 'Victim Impact Statement', desc: 'Statement of harm suffered by victim', prompt: 'Draft a victim impact statement for a criminal case' }
+    ]
+  },
+  {
+    id: 'debt', icon: '💰', name: 'Debt & Finance',
+    desc: 'Loan agreements, promissory notes, recovery documents',
+    roles: 'all',
+    docs: [
+      { name: 'Loan Agreement', desc: 'Formal lending arrangement between parties', prompt: 'Draft a loan agreement' },
+      { name: 'Promissory Note', desc: 'Written promise to repay a debt', prompt: 'Draft a promissory note' },
+      { name: 'Deed of Guarantee', desc: 'Third party guarantees another\'s debt', prompt: 'Draft a deed of guarantee' },
+      { name: 'Letter of Demand', desc: 'Formal demand for payment of a debt', prompt: 'Draft a letter of demand for debt recovery' },
+      { name: 'Debt Settlement Agreement', desc: 'Agree terms to settle outstanding debt', prompt: 'Draft a debt settlement agreement' },
+      { name: 'Credit Agreement', desc: 'Provide credit to a customer or business', prompt: 'Draft a credit agreement' },
+      { name: 'Instalment Payment Agreement', desc: 'Repay debt in structured instalments', prompt: 'Draft an instalment payment agreement' },
+      { name: 'Deed of Indemnity', desc: 'Protect one party from another\'s liability', prompt: 'Draft a deed of indemnity' }
+    ]
+  },
+  {
+    id: 'ip', icon: '💡', name: 'Intellectual Property',
+    desc: 'Trademark, copyright, patent and IP agreements',
+    roles: 'all',
+    docs: [
+      { name: 'Trademark Assignment', desc: 'Transfer trademark ownership', prompt: 'Draft a trademark assignment agreement under Nigerian law' },
+      { name: 'Copyright Assignment', desc: 'Transfer copyright in a creative work', prompt: 'Draft a copyright assignment agreement' },
+      { name: 'IP License Agreement', desc: 'Grant rights to use intellectual property', prompt: 'Draft an intellectual property license agreement' },
+      { name: 'Software License Agreement', desc: 'License software for commercial use', prompt: 'Draft a software license agreement' },
+      { name: 'Co-Authorship Agreement', desc: 'Share IP rights between creators', prompt: 'Draft a co-authorship agreement for a creative work' }
+    ]
+  },
+  {
+    id: 'demand', icon: '📬', name: 'Demand Letters & Notices',
+    desc: 'Pre-action notices, cease and desist, statutory notices',
+    roles: 'all',
+    docs: [
+      { name: 'Pre-Action Notice', desc: 'Mandatory notice before suing Federal/State government', prompt: 'Draft a pre-action notice to a government agency' },
+      { name: 'Cease and Desist Letter', desc: 'Demand someone stop an unlawful activity', prompt: 'Draft a cease and desist letter' },
+      { name: 'Notice of Breach of Contract', desc: 'Formally notify breach of agreement', prompt: 'Draft a notice of breach of contract' },
+      { name: 'Notice of Termination of Contract', desc: 'End a contract formally', prompt: 'Draft a notice of termination of contract' },
+      { name: 'Statutory Notice (Utilities/PHCN)', desc: 'Pre-action notice to utility providers', prompt: 'Draft a statutory pre-action notice to a public utility company in Nigeria' },
+      { name: 'Complaint Letter (Police/NHRC)', desc: 'Formal complaint to law enforcement or NHRC', prompt: 'Draft a formal complaint letter to the police or NHRC' }
+    ]
+  },
+  {
+    id: 'estate', icon: '🏦', name: 'Estate & Succession',
+    desc: 'Wills, probate, letters of administration',
+    roles: 'all',
+    docs: [
+      { name: 'Last Will & Testament', desc: 'Distribute assets according to your wishes', prompt: 'Draft a last will and testament' },
+      { name: 'Codicil to Will', desc: 'Amend or supplement an existing will', prompt: 'Draft a codicil to amend an existing will' },
+      { name: 'Petition for Letters of Administration', desc: 'Administer estate of person who died intestate', prompt: 'Draft a petition for letters of administration for an estate' },
+      { name: 'Petition for Grant of Probate', desc: 'Prove and execute a deceased\'s will', prompt: 'Draft a petition for grant of probate' },
+      { name: 'Deed of Family Arrangement', desc: 'Settle estate distribution among beneficiaries', prompt: 'Draft a deed of family arrangement for estate distribution' },
+      { name: 'Inheritance Renunciation', desc: 'Formally renounce inheritance rights', prompt: 'Draft a deed of renunciation of inheritance rights' }
+    ]
+  },
+  {
+    id: 'consumer', icon: '🤝', name: 'Service & Consumer Contracts',
+    desc: 'Service agreements, purchase orders, consumer contracts',
+    roles: 'all',
+    docs: [
+      { name: 'Service Agreement', desc: 'Terms for providing a service', prompt: 'Draft a service agreement' },
+      { name: 'Sales Agreement', desc: 'Buy or sell goods with defined terms', prompt: 'Draft a sales agreement for goods' },
+      { name: 'Purchase Order', desc: 'Formal order for goods or services', prompt: 'Draft a purchase order agreement' },
+      { name: 'General Agreement / Contract', desc: 'General-purpose contract between parties', prompt: 'Draft a general agreement' },
+      { name: 'Warranty Agreement', desc: 'Product or service warranty terms', prompt: 'Draft a warranty agreement for a product' },
+      { name: 'Retainer Agreement', desc: 'Ongoing service arrangement with regular fee', prompt: 'Draft a retainer agreement for professional services' }
+    ]
+  },
+  {
+    id: 'press', icon: '📰', name: 'Press & Media',
+    desc: 'FOI requests, defamation defence, source protection',
+    roles: 'all',
+    docs: [
+      { name: 'FOI Request Letter', desc: 'Request public records under FOI Act 2011', prompt: 'Draft a Freedom of Information (FOI) request letter under the Nigerian FOI Act 2011' },
+      { name: 'Response to Legal Threat Letter', desc: 'Respond to defamation threat from source', prompt: 'Draft a response to a legal threat letter received by a journalist' },
+      { name: 'Source Protection Declaration', desc: 'Assert journalist privilege over sources', prompt: 'Draft a source protection declaration for a journalist under Nigerian press law' },
+      { name: 'Interview/Photography Consent Form', desc: 'Obtain consent before publishing', prompt: 'Draft an interview and photography consent form for media use' },
+      { name: 'Publication Disclaimer', desc: 'Disclaimer for media publications', prompt: 'Draft a publication disclaimer for a Nigerian media outlet' }
+    ]
+  },
+  {
+    id: 'research', icon: '📚', name: 'Research & Academic',
+    desc: 'Case briefs, legal memos, research templates for students',
+    roles: 'all',
+    docs: [
+      { name: 'Case Brief', desc: 'Structured case analysis: facts, ratio, decision', prompt: 'Help me write a case brief for a Nigerian court judgment. What case are you briefing?' },
+      { name: 'Legal Research Memorandum', desc: 'Formal research memo on a legal question', prompt: 'Draft a legal research memorandum on a Nigerian legal issue' },
+      { name: 'Moot Court Brief', desc: 'Written submission for moot court competition', prompt: 'Draft a moot court brief arguing a Nigerian legal issue' },
+      { name: 'Legal Opinion', desc: 'Formal written legal opinion on a question', prompt: 'Draft a legal opinion on a Nigerian law issue' },
+      { name: 'Case Note / Commentary', desc: 'Academic commentary on a court decision', prompt: 'Help me write a case note analysing a Nigerian court decision' },
+      { name: 'Comparative Law Essay Outline', desc: 'Outline for comparing Nigerian law with other systems', prompt: 'Help me outline a comparative law essay on Nigerian law' }
+    ]
+  }
+];
+
+// ── DOCUMENT LIBRARY FUNCTIONS ──
+let _libActiveCat = null;
+
+function openDocLibrary(categoryId) {
+  const overlay = document.getElementById('docLibraryOverlay');
+  if (!overlay) return;
+  overlay.classList.add('open');
+  document.body.style.overflow = 'hidden';
+  renderLibCategories();
+  selectLibCategory(categoryId || DOCUMENT_LIBRARY[0].id);
+}
+
+function closeDocLibrary() {
+  const overlay = document.getElementById('docLibraryOverlay');
+  if (overlay) overlay.classList.remove('open');
+  document.body.style.overflow = '';
+}
+
+function renderLibCategories() {
+  const container = document.getElementById('libCategories');
+  if (!container) return;
+  container.innerHTML = DOCUMENT_LIBRARY.map(cat => `
+    <div class="lib-cat-item${cat.id === _libActiveCat ? ' active' : ''}" onclick="selectLibCategory('${cat.id}')">
+      <span class="lib-cat-icon">${cat.icon}</span>
+      <span class="lib-cat-name">${cat.name}</span>
+      <span class="lib-cat-count">${cat.docs.length}</span>
+    </div>
+  `).join('');
+}
+
+function selectLibCategory(catId) {
+  _libActiveCat = catId;
+  renderLibCategories();
+  const cat = DOCUMENT_LIBRARY.find(c => c.id === catId);
+  if (!cat) return;
+  const content = document.getElementById('libContent');
+  if (!content) return;
+
+  let html = `<div class="lib-cat-title">${cat.icon} ${cat.name}</div>
+    <div class="lib-cat-desc">${cat.desc}</div>`;
+
+  if (cat.featured) {
+    html += `<div class="lib-featured-banner">
+      <div style="font-size:18px;font-weight:700;margin-bottom:6px">🏛️ Registrations & Compliance</div>
+      <div style="font-size:13px;opacity:0.85">Available to all users — register your business, obtain TIN, SCUML, NAFDAC certifications and more. All guided by LegalBridge AI.</div>
+    </div>`;
+  }
+
+  html += `<div class="lib-docs-grid">` + cat.docs.map(doc => `
+    <div class="lib-doc-card">
+      <div class="lib-doc-name">${doc.name}</div>
+      <div class="lib-doc-desc">${doc.desc}</div>
+      <button class="lib-doc-generate" onclick="libraryDraft('${doc.prompt.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}', '${doc.name.replace(/'/g, "\\'")}')">
+        ✦ Generate with AI
+      </button>
+    </div>
+  `).join('') + `</div>`;
+
+  content.innerHTML = html;
+}
+
+function librarySearch(query) {
+  if (!query.trim()) {
+    selectLibCategory(_libActiveCat);
+    return;
+  }
+  const q = query.toLowerCase();
+  const content = document.getElementById('libContent');
+  if (!content) return;
+  const allDocs = [];
+  for (const cat of DOCUMENT_LIBRARY) {
+    for (const doc of cat.docs) {
+      if (doc.name.toLowerCase().includes(q) || doc.desc.toLowerCase().includes(q)) {
+        allDocs.push({ ...doc, catIcon: cat.icon, catName: cat.name });
+      }
+    }
+  }
+  if (allDocs.length === 0) {
+    content.innerHTML = `<div style="text-align:center;padding:40px;color:var(--text-muted)">No documents found for "${query}"</div>`;
+    return;
+  }
+  content.innerHTML = `<div class="lib-cat-title">Search results for "${query}"</div>
+    <div class="lib-cat-desc">${allDocs.length} document${allDocs.length !== 1 ? 's' : ''} found</div>
+    <div class="lib-docs-grid">` + allDocs.map(doc => `
+      <div class="lib-doc-card">
+        <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">${doc.catIcon} ${doc.catName}</div>
+        <div class="lib-doc-name">${doc.name}</div>
+        <div class="lib-doc-desc">${doc.desc}</div>
+        <button class="lib-doc-generate" onclick="libraryDraft('${doc.prompt.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}', '${doc.name.replace(/'/g, "\\'")}')">
+          ✦ Generate with AI
+        </button>
+      </div>
+    `).join('') + `</div>`;
+}
+
+function libraryDraft(prompt, docName) {
+  closeDocLibrary();
+  closeSidebar();
+  setTimeout(() => {
+    const ws = document.getElementById('welcomeState');
+    if (ws) ws.remove();
+    fillPrompt(prompt);
+    setTimeout(() => {
+      const input = document.getElementById('chatInput');
+      if (input && input.value.trim()) send();
+    }, 100);
+  }, 200);
+}
+
+// ═══════════════════════════════════════════════════════
 // SUPABASE INTEGRATION
 // ═══════════════════════════════════════════════════════
 
@@ -4310,6 +4751,7 @@ async function initApp() {
       .single();
     if (profileData) userProfile = profileData;
   } catch(_) {}
+  applyRoleNav();
 
   const name = user.user_metadata?.full_name || user.email.split('@')[0];
   const firstName = name.split(' ')[0];
@@ -4344,11 +4786,19 @@ async function initApp() {
   const hour = new Date().getHours();
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
 
+  const _roleSubtitles = {
+    lawyer: 'Your AI legal practice assistant',
+    student: 'Your Nigerian law research companion',
+    business: 'Your business legal advisor',
+    journalist: 'Your press law advisor'
+  };
+  const _roleSubtitle = _roleSubtitles[userProfile?.user_type] || 'Your personal AI legal assistant';
+
   document.getElementById('messagesInner').innerHTML = `
     <div class="welcome" id="welcomeState" style="padding:60px 24px 32px;">
       <div class="welcome-glyph">LB</div>
       <h1 style="font-size:28px;margin-bottom:14px;">${greeting}, ${firstName}.</h1>
-      <p style="max-width:340px;margin:0 auto;opacity:0.55;font-size:15px;line-height:1.7;">Your personal AI legal assistant, built for Nigerian law.</p>
+      <p style="max-width:340px;margin:0 auto;opacity:0.55;font-size:15px;line-height:1.7;">${_roleSubtitle}, built for Nigerian law.</p>
     </div>`;
 }
 
@@ -4833,6 +5283,19 @@ function openSettings() {
   onViewportChange();
 })();
 </script>
+
+<!-- ── DOCUMENT LIBRARY OVERLAY ── -->
+<div id="docLibraryOverlay">
+  <div class="lib-header">
+    <h2>Document Library</h2>
+    <input class="lib-search" type="search" placeholder="Search 80+ documents…" id="libSearch" oninput="librarySearch(this.value)">
+    <button class="lib-close-btn" onclick="closeDocLibrary()" title="Close">✕</button>
+  </div>
+  <div class="lib-body">
+    <div class="lib-sidebar" id="libCategories"></div>
+    <div class="lib-content" id="libContent" style="flex:1;overflow-y:auto;padding:20px"></div>
+  </div>
+</div>
 
 <!-- ── DOCUMENTS LIBRARY PANEL (real DOM) ── -->
 <div class="docs-panel-overlay" id="docsPanelOverlay" onclick="if(event.target===this)closeDocsPanel()">
