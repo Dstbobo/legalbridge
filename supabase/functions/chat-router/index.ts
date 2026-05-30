@@ -54,10 +54,22 @@ function detectIntent(message: string, hasImages: boolean, history: any[] = []):
     }
   }
 
-  // ── DOCUMENT DRAFTING — checked FIRST (a "draft … about recent X" is a draft, not a search) ──
-  const draftVerbs = /\b(draft|prepare|write|generate|create|produce|make|compose|prepare me|do up|help me (draft|prepare|write|generate|create)|i need (a|an))\b/i;
-  const docNouns = /\b(affidavit|agreement|contract|deed|petition|motion|writ|notice|memo(randum)?|letter|tenancy|lease|employment|offer\s+letter|divorce|petition\s+for\s+dissolution|power\s+of\s+attorney|MOU|NDA|non.?disclosure|consultancy|partnership|shareholders?|service\s+agreement|will|codicil|undertaking|guarantee|indemnity|loan\s+agreement|promissory\s+note|policy|terms\s+of\s+(use|service)|privacy\s+policy|cease\s+and\s+desist|demand\s+letter|FOI(\s+request)?|freedom\s+of\s+information|quit\s+notice|application|resolution|complaint|cover\s+letter|termination|warning|press\s+accreditation|response\s+letter|petition\s+letter|letter\s+of\s+demand|engagement\s+letter)\b/i;
+  // ── DOCUMENT DRAFTING — checked FIRST and FAR more permissive ──
+  // Any combination of a drafting verb / phrase + a document noun routes to chat-documents.
+  // This intentionally overrides legal/search routing because the user has explicitly
+  // asked for a document to be produced.
+  const draftVerbs = /\b(draft|prepare|write|generate|create|produce|make|compose|do up|file|fill|build|put together|help me (draft|prepare|write|generate|create|file|produce|make|put together)|can you (draft|prepare|write|generate|create|produce|make)|could you (draft|prepare|write|generate|create|produce|make)|please (draft|prepare|write|generate|create|produce|make)|i need (a|an|to file)|i want (a|an|to file)|i'?d like (a|an)|need help (drafting|preparing|writing|with))\b/i;
+  const docNouns = /\b(affidavit|agreement|contract|deed|petition|motion|writ|notice|memo(randum)?|letter|tenancy|lease|employment|offer\s+letter|divorce|petition\s+for\s+dissolution|power\s+of\s+attorney|MOU|NDA|non.?disclosure|consultancy|partnership|shareholders?|service\s+agreement|will|codicil|undertaking|guarantee|indemnity|loan\s+agreement|promissory\s+note|policy|terms\s+of\s+(use|service)|privacy\s+policy|cease\s+and\s+desist|demand\s+letter|FOI(\s+request)?|freedom\s+of\s+information|quit\s+notice|application|resolution|complaint|cover\s+letter|termination|warning|press\s+accreditation|response\s+letter|petition\s+letter|letter\s+of\s+demand|engagement\s+letter|bail\s+application|statement\s+of\s+claim|statement\s+of\s+defen[cs]e|originating\s+summons|trademark\s+assignment|brief|deposition|charge\s+sheet)\b/i;
   if (draftVerbs.test(m) && docNouns.test(m)) {
+    return 'documents';
+  }
+  // Additional documents check: even WITHOUT a draft verb, certain phrasings clearly
+  // signal a drafting request (e.g. "FOI request to NCC about ...", "tenancy agreement
+  // between Mr X and Mrs Y").
+  if (
+    /\b(FOI\s+request\s+to|application\s+for\s+bail|notice\s+to\s+quit\b|letter\s+of\s+demand\b)\b/i.test(m) ||
+    (/\b(agreement|contract|deed)\b\s+(?:between|for|with)\s+[A-Z]/i.test(message))
+  ) {
     return 'documents';
   }
 
@@ -78,7 +90,7 @@ function detectIntent(message: string, hasImages: boolean, history: any[] = []):
     /\b(legal strategy|litigation strategy|court strategy|how to win|grounds for|cause of action)\b/i.test(m) ||
     /\b(sue|file a case|go to court|take to court|institute proceedings|commence action|fundamental rights)\b/i.test(m) ||
     /\b(is it legal|is that legal|is this legal|is it illegal|legally allowed|lawful|unlawful|criminal liability|civil liability)\b/i.test(m) ||
-    /\b(bail application|remand|charge and bail|confessional statement|arraignment|plea)\b/i.test(m) ||
+    /\b(remand|charge and bail|confessional statement|arraignment|plea)\b/i.test(m) ||
     /\b(landlord|tenant|eviction|quit notice|recovery of premises|mesne profit)\b/i.test(m) ||
     /\b(divorce|adultery|custody|matrimonial|nullity|decree|maintenance|spousal)\b/i.test(m) ||
     /\b(employment|wrongful dismissal|unfair termination|nicn|labour court|minimum wage)\b/i.test(m) ||
