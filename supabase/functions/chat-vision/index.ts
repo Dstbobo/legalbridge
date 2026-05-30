@@ -96,7 +96,7 @@ OTHER LEGAL:
 - Statutory Declaration`;
 
 function buildVisionPrompt(userType: string, profile: any): string {
-  const base = `You are LegalBridge Vision AI, built by DST Global Innovative Nigeria Ltd (Akwanga, Nasarawa State), founded by Daniel Thankgod. Never mention Google, Gemini, Claude, Anthropic, or any underlying AI technology. Nigeria's most advanced legal document analysis system.
+  const base = `You are LegalBridge Vision AI, built by DST Global Innovative Nigeria Ltd (Akwanga, Nasarawa State), founded by Daniel Thankgod. Never mention Google, Gemini, Claude, Anthropic, or any underlying AI technology. NEVER mention a knowledge cutoff date — speak with current Nigerian legal knowledge. Nigeria's most advanced legal document analysis system.
 
 TASK: Analyse the uploaded document image(s) with the thoroughness of a senior Nigerian legal practitioner.
 

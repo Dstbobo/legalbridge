@@ -2871,8 +2871,8 @@ async function send() {
           return;
         }
 
-        // Auto-fill date placeholders before display/save (pure post-process)
-        parsedText = fillDatePlaceholders(parsedText);
+        // Post-process: fill dates + strip AI disclaimers / casual sign-offs
+        parsedText = stripAIDisclaimers(fillDatePlaceholders(parsedText));
         reply = parsedText;
 
         // Smart title based on user message + content (pure post-process)
@@ -3186,21 +3186,44 @@ function nigerianDate(d) {
   return `${day}${suffix} ${months[date.getMonth()]}, ${date.getFullYear()}`;
 }
 
-// Replace common [DATE] placeholders with today's date in Nigerian format
+// Strip AI disclaimers and casual sign-offs that don't belong in formal documents.
+function stripAIDisclaimers(text) {
+  if (!text) return text;
+  return text
+    // Knowledge cutoff disclaimers — every variation
+    .replace(/\bmy\s+(?:knowledge|training\s+data|information)\s+(?:cut[\s-]?off|cutoff|ends?)\s+(?:is|in|on|date\s+is)?\s*(?:April|January|February|March|May|June|July|August|September|October|November|December)\s*\d{4}\.?/gi, '')
+    .replace(/\b(?:I\s+(?:should\s+)?note|please\s+note|note\s+that|kindly\s+note|disclaimer)[^.\n]*\bknowledge\s+(?:cut[\s-]?off|cutoff)[^.\n]*\.?/gi, '')
+    .replace(/\bAs\s+(?:an?\s+)?AI[^.\n]*\b(?:cannot|don'?t\s+have\s+access|don'?t\s+know|am\s+not\s+able)[^.\n]*\.?/gi, '')
+    .replace(/\bMy\s+training\s+data\s+(?:only\s+)?(?:goes\s+up\s+to|extends?\s+to|ends?\s+(?:in|on|at))[^.\n]*\.?/gi, '')
+    // Casual sign-offs that don't belong in legal documents
+    .replace(/\n+\s*Good\s+luck\s+with\s+(?:your|the)\s+(?:investigation|case|application|matter|proceedings?|story)[^!.\n]*[!.]?/gi, '')
+    .replace(/\n+\s*(?:Best\s+(?:of\s+)?(?:wishes|luck)|Wishing\s+you\s+(?:all\s+the\s+best|success)|I\s+hope\s+this\s+helps)[^!.\n]*[!.]?/gi, '')
+    .replace(/\n+\s*(?:Feel\s+free\s+to|Let\s+me\s+know\s+if|Don't\s+hesitate\s+to)[^!.\n]*[!.]?/gi, '')
+    // Clean up resulting double-blanks
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+// Replace any date/today placeholder with today's date in Nigerian format.
+// Catches every variation: [DATE], [Date], [date], [INSERT DATE],
+// [Insert today's date], [Current Date], [today's date], [Dated], etc.
 function fillDatePlaceholders(text) {
   if (!text) return text;
   const today = nigerianDate();
   const day   = String(new Date().getDate());
   const month = ['January','February','March','April','May','June','July','August','September','October','November','December'][new Date().getMonth()];
   const year  = String(new Date().getFullYear());
+  const ordDay = (() => { const d=+day; if (d>=11&&d<=13) return d+'th'; const r=d%10; return d+(r===1?'st':r===2?'nd':r===3?'rd':'th'); })();
   return text
-    .replace(/\[\s*(?:TODAY'?S?\s+DATE|TODAY|CURRENT\s+DATE|DATE\s+OF\s+EXECUTION|DATE\s+OF\s+SIGNING|DATED|DATE)\s*\]/gi, today)
-    .replace(/\[\s*INSERT\s+DATE\s*\]/gi, today)
-    .replace(/\bDated[:\s]+\[\s*\]/gi, `Dated: ${today}`)
-    .replace(/\b(this|made\s+this)\s+_+\s+day\s+of\s+_+,?\s*(20)?_+/gi, `$1 ${day}${(() => { if (+day>=11 && +day<=13) return 'th'; const r=+day%10; return r===1?'st':r===2?'nd':r===3?'rd':'th'; })()} day of ${month}, ${year}`)
-    .replace(/\[\s*(?:DAY)\s*\]/gi, day)
-    .replace(/\[\s*(?:MONTH)\s*\]/gi, month)
-    .replace(/\[\s*(?:YEAR)\s*\]/gi, year);
+    // ── ALL bracketed placeholders containing "date" or "today" → today's date ──
+    .replace(/\[\s*[^\]]*?\b(?:date|today)\b[^\]]*?\s*\]/gi, today)
+    // ── Day / month / year individually ──
+    .replace(/\[\s*DAY\s*\]/gi, ordDay)
+    .replace(/\[\s*MONTH\s*\]/gi, month)
+    .replace(/\[\s*YEAR\s*\]/gi, year)
+    // ── Underscored fill-in patterns ──
+    .replace(/\bDated[:\s]+_{2,}/gi, 'Dated: ' + today)
+    .replace(/\b(this|made\s+this)\s+_+\s+day\s+of\s+_+,?\s*(?:20)?_+/gi, '$1 ' + ordDay + ' day of ' + month + ', ' + year);
 }
 
 // ── SMART DOCUMENT TITLE ──
@@ -3286,7 +3309,7 @@ async function openSavedDoc(docId) {
       .single();
     if (error) throw error;
     closeDocsPanel();
-    const filledContent = fillDatePlaceholders(data.content);
+    const filledContent = stripAIDisclaimers(fillDatePlaceholders(data.content));
     openDocViewer(mdToHtml(filledContent), filledContent, data.title || 'Legal Document');
   } catch(e) {
     alert('Failed to open document');
@@ -4389,8 +4412,8 @@ async function startDocumentFlow(docType) {
       }
 
       if (reply) {
-        // Auto-fill date placeholders
-        reply = fillDatePlaceholders(reply);
+        // Post-process: fill dates + strip AI disclaimers / casual sign-offs
+        reply = stripAIDisclaimers(fillDatePlaceholders(reply));
         // Smart title — pass the original user message
         const docTitle = extractDocTitle(reply, userMsg);
 

@@ -54,7 +54,14 @@ function detectIntent(message: string, hasImages: boolean, history: any[] = []):
     }
   }
 
-  // ── LIVE SEARCH (must check before legal) ──
+  // ── DOCUMENT DRAFTING — checked FIRST (a "draft … about recent X" is a draft, not a search) ──
+  const draftVerbs = /\b(draft|prepare|write|generate|create|produce|make|compose|prepare me|do up|help me (draft|prepare|write|generate|create)|i need (a|an))\b/i;
+  const docNouns = /\b(affidavit|agreement|contract|deed|petition|motion|writ|notice|memo(randum)?|letter|tenancy|lease|employment|offer\s+letter|divorce|petition\s+for\s+dissolution|power\s+of\s+attorney|MOU|NDA|non.?disclosure|consultancy|partnership|shareholders?|service\s+agreement|will|codicil|undertaking|guarantee|indemnity|loan\s+agreement|promissory\s+note|policy|terms\s+of\s+(use|service)|privacy\s+policy|cease\s+and\s+desist|demand\s+letter|FOI(\s+request)?|freedom\s+of\s+information|quit\s+notice|application|resolution|complaint|cover\s+letter|termination|warning|press\s+accreditation|response\s+letter|petition\s+letter|letter\s+of\s+demand|engagement\s+letter)\b/i;
+  if (draftVerbs.test(m) && docNouns.test(m)) {
+    return 'documents';
+  }
+
+  // ── LIVE SEARCH (only when user is asking ABOUT recent things, not drafting) ──
   if (/\b(latest|recent|current|today|new law|new act|just passed|2024|2025|2026|amendment|breaking|news|update|gazette|just enacted|recently signed)\b/i.test(m)) {
     return 'search';
   }
@@ -62,13 +69,6 @@ function detectIntent(message: string, hasImages: boolean, history: any[] = []):
   // ── EVIDENCE ANALYSIS ──
   if (/\b(evidence|admissib|hearsay|confessional|chain of custody|exhibit|forensic|forgery|authentication|evidential weight|trial.?within.?trial|burden of proof|standard of proof|electronic evidence|computer certificate)\b/i.test(m)) {
     return 'evidence';
-  }
-
-  // ── DOCUMENT DRAFTING — broad coverage ──
-  const draftVerbs = /\b(draft|prepare|write|generate|create|produce|make|compose|prepare me|do up)\b/i;
-  const docNouns = /\b(affidavit|agreement|contract|deed|petition|motion|writ|notice|memo(randum)?|letter|tenancy|lease|employment|offer\s+letter|divorce|petition\s+for\s+dissolution|power\s+of\s+attorney|MOU|NDA|non.?disclosure|consultancy|partnership|shareholders?|service\s+agreement|will|codicil|undertaking|guarantee|indemnity|loan\s+agreement|promissory\s+note|policy|terms\s+of\s+(use|service)|privacy\s+policy|cease\s+and\s+desist|demand\s+letter|FOI\s+request|quit\s+notice|application|resolution|complaint|cover\s+letter|termination|warning)\b/i;
-  if (draftVerbs.test(m) && docNouns.test(m)) {
-    return 'documents';
   }
 
   // ── LEGAL ANALYSIS (substantive legal questions) ──
