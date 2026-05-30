@@ -243,14 +243,19 @@ Additional Drafting Standards:
 DOCUMENT TYPE DETECTED: ${docType.toUpperCase()}
 ${docTemplate}`;
 
-    // Add persona context
+    // Add persona context — state only. NO role-conditional output shape.
+    // Every role gets a PURE document with no conversational framing and no
+    // appended plain-English explanation. This is THE one rule that ensures
+    // the document card renders identically for all 6 user types. The
+    // previous "non-lawyer → add explanation" branch directly contradicted
+    // the "Output only the requested document" rule above, causing Claude
+    // to inconsistently wrap docs in prose for non-lawyer roles — which
+    // broke document-shape detection and the card never rendered.
     if (profile?.state) systemPrompt += `\nUser's state: ${profile.state} — apply state-specific laws where relevant.`;
-    if (userType === 'lawyer') {
-      systemPrompt += `\nUser is a licensed Nigerian lawyer — use full technical legal language and drafting conventions.`;
-      if (profile?.specializations?.length) systemPrompt += ` Specializations: ${profile.specializations.join(', ')}.`;
-    } else {
-      systemPrompt += `\nUser is not a lawyer — after the document, add a brief plain English explanation of key clauses.`;
+    if (userType === 'lawyer' && profile?.specializations?.length) {
+      systemPrompt += `\nUser's practice specializations: ${profile.specializations.join(', ')}.`;
     }
+    systemPrompt += `\n\nIMPORTANT: Output ONLY the legal document. No introduction sentence ("Here is your..."), no closing prose ("This document means...", "Let me know if..."), no plain-English explanation appended. The document must START with the formal heading (e.g. "# AFFIDAVIT", "IN THE HIGH COURT...", "THIS TENANCY AGREEMENT...") and END with the signature/jurat/execution block. Nothing else.`;
 
     // Inject conversation summary for context
     if (summary) {
