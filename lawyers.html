@@ -575,21 +575,21 @@ html,body{min-height:100vh;background:var(--bg);color:var(--text);font-family:va
   <button class="btn-gold" onclick="openRegisterModal()">List Your Profile — From ₦5,000/month</button>
 </div>
 
-<!-- BOTTOM NAV -->
+<!-- BOTTOM NAV — 4 tabs: AI Chat, Lawyers (active), Messages, Profile -->
 <div class="bottom-nav">
-  <div class="nav-item" onclick="window.location='chat.html'">
+  <div class="nav-item" onclick="window.location.href='chat.html'" style="cursor:pointer">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
     AI Chat
   </div>
-  <div class="nav-item active">
+  <div class="nav-item active" style="cursor:pointer">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg>
     Lawyers
   </div>
-  <div class="nav-item">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-    Documents
+  <div class="nav-item" onclick="window.location.href='chat.html?open=messages'" style="cursor:pointer;position:relative">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"/></svg>
+    Messages
   </div>
-  <div class="nav-item">
+  <div class="nav-item" onclick="window.location.href='settings.html'" style="cursor:pointer">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="4"/><path d="M20 21a8 8 0 10-16 0"/></svg>
     Profile
   </div>

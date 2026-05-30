@@ -1889,17 +1889,9 @@
     </button>
 
     <div class="sidebar-nav">
-      <a class="sidebar-nav-item" data-roles="all" href="javascript:void(0)" onclick="closeSidebar();openMessages()">
-        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"/></svg>
-        Messages <span id="sidebarMsgBadge" style="display:none;margin-left:auto;background:var(--accent);color:#fff;font-size:10px;font-weight:700;padding:2px 7px;border-radius:10px"></span>
-      </a>
       <a class="sidebar-nav-item" data-roles="student" href="javascript:void(0)" onclick="closeSidebar();openMentorship()">
         <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 14l9-5-9-5-9 5 9 5z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 14l6.16-3.422a12.083 12.083 0 01.665 6.479A11.952 11.952 0 0012 20.055a11.952 11.952 0 00-6.824-2.998 12.078 12.078 0 01.665-6.479L12 14z"/></svg>
         Mentorship
-      </a>
-      <a class="sidebar-nav-item" data-roles="all" href="#profile" onclick="closeSidebar()">
-        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4" stroke-width="1.8"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M20 21a8 8 0 10-16 0"/></svg>
-        My Profile
       </a>
       <a class="sidebar-nav-item" data-roles="all" href="#" onclick="closeSidebar()">
         <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
@@ -2047,17 +2039,14 @@
     <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>
     AI Chat
   </button>
-  <button class="bottom-nav-item" id="tabLawyers" data-roles="other,individual,business,journalist" onclick="switchTab('lawyers')">
+  <button class="bottom-nav-item" id="tabLawyers" onclick="switchTab('lawyers')">
     <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4" stroke-width="1.8"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75" stroke-width="1.8"/></svg>
     Lawyers
   </button>
-  <button class="bottom-nav-item" id="tabClients" data-roles="lawyer" onclick="switchTab('clients')">
-    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
-    Clients
-  </button>
-  <button class="bottom-nav-item" id="tabDocs" onclick="switchTab('docs')">
-    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8" stroke-width="1.8"/><line x1="16" y1="13" x2="8" y2="13" stroke-width="1.8"/><line x1="16" y1="17" x2="8" y2="17" stroke-width="1.8"/></svg>
-    Documents
+  <button class="bottom-nav-item" id="tabMessages" onclick="switchTab('messages')" style="position:relative">
+    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"/></svg>
+    Messages
+    <span id="tabMsgBadge" style="display:none;position:absolute;top:6px;right:18%;background:#ef4444;color:#fff;font-size:9px;font-weight:700;padding:1px 5px;border-radius:8px;min-width:14px;text-align:center"></span>
   </button>
   <button class="bottom-nav-item" id="tabProfile" onclick="switchTab('profile')">
     <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4" stroke-width="1.8"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M20 21a8 8 0 10-16 0"/></svg>
@@ -4454,20 +4443,24 @@ function switchTab(tab) {
 
   switch (tab) {
     case 'chat':
-      // Already on chat — just close any overlays
-      closeDocsPanel(); closeDocLibrary(); closeResearchTools(); closeMyClients();
+      // Close any open overlays and return to chat surface
+      closeDocsPanel && closeDocsPanel();
+      closeDocLibrary && closeDocLibrary();
+      closeResearchTools && closeResearchTools();
+      closeMyClients && closeMyClients();
+      closeMessages && closeMessages();
+      closeConversation && closeConversation();
+      closeMentorship && closeMentorship();
+      closeVerification && closeVerification();
       break;
     case 'lawyers':
       window.location.href = 'lawyers.html';
       break;
-    case 'clients':
-      openMyClients();
-      break;
-    case 'docs':
-      openDocsPanel();
+    case 'messages':
+      openMessages();
       break;
     case 'profile':
-      openSettings();
+      window.location.href = 'settings.html';
       break;
   }
 }
@@ -4907,46 +4900,61 @@ async function openMyClients() {
   const body = document.getElementById('myClientsBody');
   body.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted)">Loading clients…</div>';
 
-  // Load chats where this lawyer has had consultations
-  // For now, show the lawyer's recent cases as client interactions
+  // Only show REAL clients — users who have a conversation with this lawyer
+  // (consultations or accepted mentorships). NOT the lawyer's own AI chat history.
   try {
-    const { data: chats } = await sb
-      .from('chats')
+    const { data: convs, error } = await sb
+      .from('conversations')
       .select('*')
-      .eq('user_id', currentUser.id)
-      .order('updated_at', { ascending: false })
-      .limit(50);
+      .or(`user_a.eq.${currentUser.id},user_b.eq.${currentUser.id}`)
+      .in('kind', ['consultation', 'inquiry', 'mentorship'])
+      .order('last_message_at', { ascending: false, nullsFirst: false });
+    if (error) throw error;
 
-    if (!chats || chats.length === 0) {
+    if (!convs || convs.length === 0) {
       body.innerHTML = `
         <div style="text-align:center;padding:60px 20px">
           <div style="font-size:48px;margin-bottom:16px;opacity:0.3">👥</div>
           <div style="font-size:16px;font-weight:600;margin-bottom:6px;color:var(--text)">No clients yet</div>
-          <div style="font-size:13px;color:var(--text-muted);max-width:300px;margin:0 auto;line-height:1.6">
-            When clients consult or hire you through LegalBridge, they will appear here.
-            Share your profile to attract clients.
+          <div style="font-size:13px;color:var(--text-muted);max-width:340px;margin:0 auto;line-height:1.6">
+            When users request consultation or hire you through LegalBridge, they will appear here.
           </div>
         </div>`;
       return;
     }
 
-    // Group by unique case titles as "clients"
+    // Resolve other-party profiles
+    const otherIds = convs.map(c => c.user_a === currentUser.id ? c.user_b : c.user_a);
+    const { data: profs } = await sb.from('profiles').select('id, full_name, user_type').in('id', otherIds);
+    const profMap = {}; (profs || []).forEach(p => profMap[p.id] = p);
+
     let html = `<div style="margin-bottom:20px">
-      <div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:4px">${chats.length} Active Matter${chats.length !== 1 ? 's' : ''}</div>
-      <div style="font-size:12px;color:var(--text-muted)">Cases and consultations from your practice</div>
+      <div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:4px">${convs.length} Active Client${convs.length !== 1 ? 's' : ''}</div>
+      <div style="font-size:12px;color:var(--text-muted)">People who have connected with you through LegalBridge</div>
     </div>`;
 
-    html += chats.map(c => {
-      const date = new Date(c.updated_at).toLocaleDateString('en-NG', { day: 'numeric', month: 'short', year: 'numeric' });
-      const safeTitle = (c.title || 'Untitled').replace(/'/g, "\\'").replace(/"/g, '&quot;');
-      return `<div style="background:var(--surface-2);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:10px;cursor:pointer;transition:border-color 0.15s" onclick="closeMyClients();openChat('${c.id}','${safeTitle}',null)" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'">
+    html += convs.map(c => {
+      const otherId = c.user_a === currentUser.id ? c.user_b : c.user_a;
+      const other = profMap[otherId] || { full_name: 'Client', user_type: 'other' };
+      const badge = ROLE_BADGES[other.user_type] || ROLE_BADGES.other;
+      const kindLabel = c.kind === 'mentorship' ? '🎓 Mentorship' : c.kind === 'inquiry' ? '💼 Inquiry' : '⚖️ Consultation';
+      const statusBadge = c.status === 'pending'
+        ? '<span style="padding:1px 8px;border-radius:10px;font-size:10px;font-weight:700;background:rgba(245,158,11,0.15);color:#f59e0b">Pending</span>'
+        : c.status === 'unlocked'
+          ? '<span style="padding:1px 8px;border-radius:10px;font-size:10px;font-weight:700;background:rgba(34,197,94,0.15);color:#22c55e">Active</span>'
+          : '<span style="padding:1px 8px;border-radius:10px;font-size:10px;font-weight:700;background:rgba(107,114,128,0.18);color:#9ca3af">Closed</span>';
+      return `<div onclick="closeMyClients();openConversation('${c.id}')" style="background:var(--surface-2);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:10px;cursor:pointer;transition:border-color 0.15s" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'">
         <div style="display:flex;align-items:center;gap:12px">
-          <div style="width:40px;height:40px;border-radius:50%;background:rgba(74,142,245,0.15);display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0">⚖️</div>
+          <div style="width:40px;height:40px;border-radius:50%;background:${badge.bg};display:flex;align-items:center;justify-content:center;font-weight:700;color:${badge.color};font-size:13px;flex-shrink:0">${initials(other.full_name)}</div>
           <div style="flex:1;min-width:0">
-            <div style="font-size:14px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${c.title || 'Untitled Case'}</div>
-            <div style="font-size:12px;color:var(--text-muted);margin-top:2px;display:flex;gap:10px;align-items:center">
-              <span>${date}</span>
-              <span style="padding:1px 8px;border-radius:10px;font-size:10px;font-weight:700;background:rgba(34,197,94,0.15);color:#22c55e">Active</span>
+            <div style="display:flex;align-items:center;gap:6px;margin-bottom:2px">
+              <div style="font-size:14px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${other.full_name || 'Client'}</div>
+              <span style="font-size:9px;font-weight:700;padding:2px 7px;border-radius:8px;background:${badge.bg};color:${badge.color}">${badge.label}</span>
+            </div>
+            <div style="font-size:12px;color:var(--text-muted);display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+              <span>${kindLabel}</span>
+              ${statusBadge}
+              <span>${timeAgo(c.last_message_at || c.created_at)}</span>
             </div>
           </div>
           <div style="font-size:12px;color:var(--accent);font-weight:600">Open →</div>
@@ -5085,10 +5093,10 @@ async function updateMessageBadge() {
     .in('conversation_id', convs.map(c => c.id))
     .neq('sender_id', currentUser.id)
     .is('read_at', null);
-  const badge = document.getElementById('sidebarMsgBadge');
-  if (badge) {
-    if (count && count > 0) { badge.textContent = count; badge.style.display = 'inline-block'; }
-    else badge.style.display = 'none';
+  const tabBadge = document.getElementById('tabMsgBadge');
+  if (tabBadge) {
+    if (count && count > 0) { tabBadge.textContent = count > 99 ? '99+' : count; tabBadge.style.display = 'inline-block'; }
+    else tabBadge.style.display = 'none';
   }
 }
 
@@ -5635,6 +5643,14 @@ async function initApp() {
   updateMessageBadge().catch(() => {});
   // Poll badge every 30s
   setInterval(() => updateMessageBadge().catch(() => {}), 30000);
+
+  // Honour deep-link query params from cross-page tab navigation
+  // (e.g. lawyers.html sends ?open=messages when user taps Messages tab)
+  const params = new URLSearchParams(window.location.search);
+  const openTarget = params.get('open');
+  if (openTarget === 'messages') {
+    setTimeout(() => openMessages(), 80);
+  }
 
   const name = user.user_metadata?.full_name || user.email.split('@')[0];
   const firstName = name.split(' ')[0];
