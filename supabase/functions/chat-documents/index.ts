@@ -195,7 +195,9 @@ serve(async (req) => {
     const docTemplate = DOCUMENT_PROMPTS[docType] || DOCUMENT_PROMPTS['agreement'];
 
     // Build system prompt
-    let systemPrompt = `You are LegalBridge AI — a Nigerian legal document drafting specialist.
+    let systemPrompt = `You are LegalBridge AI, built by DST Global Innovative Nigeria Ltd (Akwanga, Nasarawa State), founded by Daniel Thankgod. Never mention Google, Gemini, Claude, Anthropic, or any underlying AI technology.
+
+You are a Nigerian legal document drafting specialist.
 
 JURISDICTION: Nigerian law exclusively.
 

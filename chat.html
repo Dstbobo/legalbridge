@@ -1992,80 +1992,7 @@
           <div class="welcome-glyph">LB</div>
           <h1>How can LegalBridge help you?</h1>
           <p>Describe your case from the beginning. LegalBridge will classify it, identify the right court, and walk you through the exact Nigerian legal procedure step by step.</p>
-          <div class="starters">
-            <div class="starter" onclick="fillPrompt('My neighbour encroached on my land and built a fence past my boundary marker...')">
-              <div class="starter-type">Land dispute</div>
-              <div class="starter-text">Neighbour encroached on my land and built a fence...</div>
-            </div>
-            <div class="starter" onclick="fillPrompt('I lent ₦500,000 to a business partner 8 months ago and he has refused to repay despite several demands...')">
-              <div class="starter-type">Debt recovery</div>
-              <div class="starter-text">Business partner has refused to repay a ₦500,000 loan...</div>
-            </div>
-            <div class="starter" onclick="fillPrompt('My client was arrested by the police and has been detained for over 48 hours without being charged to court...')">
-              <div class="starter-type">Criminal matter</div>
-              <div class="starter-text">Client detained over 48 hours without charge...</div>
-            </div>
-            <div class="starter" onclick="fillPrompt('My employer terminated my appointment without giving any notice period or paying my severance entitlements...')">
-              <div class="starter-type">Employment</div>
-              <div class="starter-text">Terminated without notice or severance pay...</div>
-            </div>
-            <div class="starter" onclick="fillPrompt('Police officers in uniform stopped my client on the road, physically assaulted him, extorted money from him and threatened to plant drugs on him if he refused to cooperate...')">
-              <div class="starter-type">Police harassment</div>
-              <div class="starter-text">Client assaulted and extorted by police officers on the road...</div>
-            </div>
-            <div class="starter" onclick="fillPrompt('My client was picked up by men claiming to be SARS operatives, taken to an unknown location, tortured for three days and forced to sign a confession without a lawyer present...')">
-              <div class="starter-type">SARS brutality</div>
-              <div class="starter-text">Client abducted, tortured and forced to sign confession by SARS...</div>
-            </div>
-            <div class="starter" onclick="fillPrompt('Government officials came with bulldozers and demolished my client\'s property and shop without any prior notice, compensation or court order...')">
-              <div class="starter-type">Forced demolition</div>
-              <div class="starter-text">Government demolished client\'s property without notice or compensation...</div>
-            </div>
-            <div class="starter" onclick="fillPrompt('A land grabber with thugs invaded my client\'s land with a forged Certificate of Occupancy and has started building. My client has the original C of O...')">
-              <div class="starter-type">Land grabbing</div>
-              <div class="starter-text">Land grabbers with forged C of O invaded client\'s property...</div>
-            </div>
-            <div class="starter" onclick="fillPrompt('My client\'s landlord has locked up the apartment, seized his belongings and changed the locks without a court order, claiming unpaid rent of two months...')">
-              <div class="starter-type">Illegal eviction</div>
-              <div class="starter-text">Landlord locked out tenant and seized belongings without court order...</div>
-            </div>
-            <div class="starter" onclick="fillPrompt('EFCC operatives raided my client\'s office and home, seized his phones, laptops and documents and have been holding him for 5 days without formal charges or access to his lawyer...')">
-              <div class="starter-type">EFCC detention</div>
-              <div class="starter-text">Client held by EFCC for 5 days without charge or legal access...</div>
-            </div>
-            <div class="starter" onclick="fillPrompt('My client was involved in a road accident caused by a danfo driver. He sustained serious injuries, lost his job and the driver\'s union is threatening him not to pursue the matter...')">
-              <div class="starter-type">Road accident</div>
-              <div class="starter-text">Client injured in accident, union threatening him not to pursue case...</div>
-            </div>
-            <div class="starter" onclick="fillPrompt('A traditional ruler and family members are using community pressure and threats to seize my client\'s inherited family land, claiming it belongs to the community. My client has the will and documents...')">
-              <div class="starter-type">Family land seizure</div>
-              <div class="starter-text">Traditional ruler seizing client\'s inherited family land by force...</div>
-            </div>
-            <div class="starter" onclick="fillPrompt('My client paid ₦3.5 million to a property developer for a house. The developer has abandoned the project, is unreachable and has refused to refund the money...')">
-              <div class="starter-type">Property fraud</div>
-              <div class="starter-text">Developer collected ₦3.5M, abandoned project and disappeared...</div>
-            </div>
-            <div class="starter" onclick="fillPrompt('My client is a journalist who was arrested and detained for publishing a story about a government official. The authorities are claiming cybercrime and defamation...')">
-              <div class="starter-type">Press freedom</div>
-              <div class="starter-text">Journalist arrested and charged for publishing story on official...</div>
-            </div>
-            <div class="starter" onclick="fillPrompt('My client\'s business partner secretly transferred company funds into a personal account, registered a competing company using the same business name and is now poaching clients...')">
-              <div class="starter-type">Business fraud</div>
-              <div class="starter-text">Partner diverted company funds and registered competing business...</div>
-            </div>
-            <div class="starter" onclick="fillPrompt('A hospital refused to treat my client\'s child during an emergency, demanding upfront payment first. The child suffered serious harm due to the delay in receiving treatment...')">
-              <div class="starter-type">Medical negligence</div>
-              <div class="starter-text">Hospital refused emergency treatment, child harmed due to delay...</div>
-            </div>
-            <div class="starter" onclick="fillPrompt('My client was defrauded of ₦800,000 through a fake investment scheme on WhatsApp. The fraudster promised 50% returns in 30 days and has now gone silent...')">
-              <div class="starter-type">Investment fraud</div>
-              <div class="starter-text">Client defrauded ₦800K through fake WhatsApp investment scheme...</div>
-            </div>
-            <div class="starter" onclick="fillPrompt('DSS operatives arrested my client at his home at midnight without a warrant, have not disclosed any charges and have denied family members and his lawyer access to him for 72 hours...')">
-              <div class="starter-type">DSS detention</div>
-              <div class="starter-text">Client arrested by DSS at midnight, no warrant, no access to lawyer...</div>
-            </div>
-          </div>
+          <div class="starters" id="starterCards"></div>
         </div>
 
       </div>
@@ -2151,55 +2078,121 @@ let userProfile = null;
 // ── CONTEXTUAL LOADING MESSAGES BY USER TYPE ──
 function getLoadingMessage(userMsg) {
   const msg = (userMsg || '').toLowerCase();
-  const type = userProfile?.user_type || "other";
+  const type = userProfile?.user_type || 'other';
 
-  // Live search detection — show search-specific message
-  const isLive = /latest|recent|current|today|new law|new act|just passed|2024|2025|2026|amendment|breaking|news|update/.test(msg);
-  if (isLive) {
-    return type === 'lawyer'
-      ? 'Searching latest Nigerian legal developments and gazette notices...'
-      : type === 'student'
-      ? 'Searching for recent legal updates and new legislation...'
-      : type === 'business'
-      ? 'Searching latest regulatory and compliance updates...'
-      : 'Searching for the latest Nigerian legal news...';
+  // ── CONTEXTUAL STATUS based on message content + role ──
+  // Draft/document detection
+  if (/draft|write|prepare|generate/.test(msg)) {
+    const docName = msg.match(/(?:draft|write|prepare|generate)\s+(?:a\s+|an\s+)?([\w\s]+)/i);
+    return '✍️ Drafting your ' + (docName ? docName[1].trim().slice(0, 30) : 'document') + '...';
+  }
+  if (/affidavit|agreement|contract|deed|petition|motion|writ|notice|memo/.test(msg))
+    return '✍️ Preparing your legal document...';
+  if (/find.*lawyer|search.*lawyer|recommend.*lawyer/.test(msg))
+    return '🔍 Finding verified lawyers for you...';
+  if (/summari[sz]e|analy[sz]e|review/.test(msg))
+    return '📄 Analysing your document...';
+  if (/register|CAC|TIN|NAFDAC|SCUML/.test(msg))
+    return '🏛️ Checking registration requirements...';
+  if (/^(hello|hi|hey|how are you|good morning|good afternoon|good evening)/i.test(msg.trim()))
+    return '💬 LegalBridge is here...';
+
+  // Role-specific content detection
+  if (type === 'other' || type === 'individual') {
+    if (/arrest|rights|police|sars|dss|detention/.test(msg)) return '⚖️ Checking your rights under Nigerian law...';
+    if (/land|property|tenancy|landlord|tenant|rent/.test(msg)) return '🏠 Searching property and tenancy law...';
+    if (/debt|loan|money|owe|borrow/.test(msg)) return '💰 Checking debt recovery options...';
+  }
+  if (type === 'lawyer') {
+    if (/precedent|case law|authority|nwlr|lpelr/.test(msg)) return '📚 Searching legal precedents and statutes...';
+    if (/client|case|court|hearing|trial|filing/.test(msg)) return '⚖️ Reviewing case law for you...';
+    return '📚 Searching Nigerian law database...';
+  }
+  if (type === 'student') return '🎓 Searching Nigerian case law and statutes...';
+  if (type === 'business') {
+    if (/contract|agreement|employee|employer/.test(msg)) return '💼 Analysing under Nigerian business law...';
+    if (/tax|licence|CAC|compliance/.test(msg)) return '📋 Checking regulatory requirements...';
+    return '💼 Searching Nigerian business law...';
+  }
+  if (type === 'journalist') {
+    if (/FOI|press|defamation|publication|source/.test(msg)) return '📰 Checking press freedom and media laws...';
+    return '📰 Searching Nigerian media law...';
   }
 
-  // Standard legal query messages by user type
-  const messages = {
-    lawyer: [
-      "Retrieving relevant NWLR and LPELR authorities...",
-      "Analysing applicable statutes and judicial precedents...",
-      "Searching Nigerian case law and statutory provisions...",
-      "Building legal analysis from Nigerian law database..."
-    ],
-    student: [
-      "Researching applicable law and precedents...",
-      "Extracting ratio decidendi from relevant authorities...",
-      "Structuring IRAC analysis...",
-      "Searching Nigerian case law and statutes..."
-    ],
-    business: [
-      "Analysing applicable regulatory framework...",
-      "Checking CAMA 2020 and compliance requirements...",
-      "Reviewing relevant business and commercial laws...",
-      "Preparing commercial legal advisory..."
-    ],
-    journalist: [
-      "Checking FOI Act and press law provisions...",
-      "Reviewing Cybercrime Act and defamation law...",
-      "Analysing press freedom protections...",
-      "Searching applicable media law..."
-    ],
-    other: [
-      "Looking up your rights under Nigerian law...",
-      "Searching for relevant legal information...",
-      "Finding the answer for you...",
-      "Checking Nigerian law on this..."
-    ]
-  };
-  const list = messages[type] || messages["other"];
-  return list[Math.floor(Math.random() * list.length)];
+  return '📚 Searching Nigerian law database...';
+}
+
+// ── DYNAMIC SUGGESTION CARDS ──
+const STARTER_CARDS = {
+  individual: [
+    { type: 'Debt Recovery', text: 'Business partner refused to repay ₦500,000 loan' },
+    { type: 'Police Harassment', text: 'Assaulted and extorted by officers on the road' },
+    { type: 'Tenancy Issue', text: 'Landlord refusing to return my deposit' },
+    { type: 'Wrongful Dismissal', text: 'Terminated without notice or severance pay' },
+    { type: 'Land Dispute', text: 'Neighbour encroached on my property' },
+    { type: 'Forced Demolition', text: 'Government demolished property without notice' },
+    { type: 'Criminal Matter', text: 'Detained over 48 hours without charge' },
+    { type: 'SARS Brutality', text: 'Abducted and forced to sign confession' }
+  ],
+  lawyer: [
+    { type: 'Legal Opinion', text: 'Draft legal opinion for client matter' },
+    { type: 'Precedent Search', text: 'Find precedent for ongoing criminal case' },
+    { type: 'Bail Application', text: 'Client needs urgent bail application' },
+    { type: 'Contract Review', text: 'Review contract enforceability under Nigerian law' },
+    { type: 'Statute Research', text: 'Research statute for ongoing court matter' },
+    { type: 'Court Filing', text: 'Prepare court filing for client' }
+  ],
+  student: [
+    { type: 'Legal Principle', text: 'Explain this legal principle in simple terms' },
+    { type: 'Case Summary', text: 'Summarise this judgement for my studies' },
+    { type: 'Moot Court', text: 'Help me prepare moot court argument' },
+    { type: 'Constitutional Law', text: 'Find cases on constitutional law' },
+    { type: 'Legal Terms', text: 'What does this legal term mean' },
+    { type: 'Statute Guide', text: 'Help me understand this statute' }
+  ],
+  business: [
+    { type: 'Employment', text: 'Employee violated employment contract terms' },
+    { type: 'Breach', text: 'Supplier breached our business agreement' },
+    { type: 'Debt Recovery', text: 'I need to recover a business debt legally' },
+    { type: 'Contract Review', text: 'Review my partnership agreement' },
+    { type: 'Licencing', text: 'What licences does my business need in Nigeria' },
+    { type: 'NDA', text: 'Draft NDA for new business partner' }
+  ],
+  journalist: [
+    { type: 'FOI', text: 'Submit FOI request to government agency' },
+    { type: 'Defamation', text: 'Received defamation threat from source' },
+    { type: 'Access', text: 'Government blocking access to information' },
+    { type: 'Source Protection', text: 'Need source protection advice urgently' },
+    { type: 'Publication', text: 'How to publish sensitive investigation safely' }
+  ],
+  other: [
+    { type: 'Legal Advice', text: 'I need urgent legal advice' },
+    { type: 'Rights', text: 'What are my basic legal rights in Nigeria' },
+    { type: 'Document', text: 'I need a simple legal document drafted' },
+    { type: 'Find Lawyer', text: 'Find me a verified lawyer near me' },
+    { type: 'Legal Notice', text: 'Explain this legal notice I received' }
+  ]
+};
+
+function getStarterCards() {
+  const type = userProfile?.user_type || 'other';
+  const pool = STARTER_CARDS[type] || STARTER_CARDS.other;
+  // Shuffle and pick 3
+  const shuffled = [...pool].sort(() => Math.random() - 0.5);
+  return shuffled.slice(0, 3);
+}
+
+function populateStarterCards() {
+  const el = document.getElementById('starterCards');
+  if (!el) return;
+  const cards = getStarterCards();
+  el.innerHTML = cards.map(c => {
+    const safeText = c.text.replace(/'/g, "\\'");
+    return `<div class="starter" onclick="fillPrompt('${safeText}')">
+      <div class="starter-type">${c.type}</div>
+      <div class="starter-text">${c.text}</div>
+    </div>`;
+  }).join('');
 }
 let currentChatId = null;
 let savingChat = false;
@@ -5227,6 +5220,7 @@ async function initApp() {
   if (!chats || chats.length === 0) {
     // NEW USER — show welcome + starters
     list.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:12px">No cases yet — start a new one.</div>';
+    populateStarterCards();
     return;
   }
 
@@ -5252,7 +5246,9 @@ async function initApp() {
       <div class="welcome-glyph">LB</div>
       <h1 style="font-size:28px;margin-bottom:14px;">${greeting}, ${firstName}.</h1>
       <p style="max-width:340px;margin:0 auto;opacity:0.55;font-size:15px;line-height:1.7;">${_roleSubtitle}, built for Nigerian law.</p>
+      <div class="starters" id="starterCards"></div>
     </div>`;
+  populateStarterCards();
 }
 
 async function loadChats() {

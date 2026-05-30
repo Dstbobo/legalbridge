@@ -513,7 +513,7 @@ body::before{
         <div class="success-icon">⚖️</div>
         <div class="success-title">Welcome to LegalBridge!</div>
         <div class="success-sub">Your account is ready. LegalBridge now knows how to help you better based on your profile.</div>
-        <button class="btn-primary" onclick="window.location.href='chat.html'">Start My First Case →</button>
+        <button class="btn-primary" id="successBtn" onclick="window.location.href='chat.html'">Start My First Case →</button>
       </div>
     </div>
 
@@ -704,6 +704,18 @@ async function doSignup() {
       document.getElementById(id).classList.remove('active');
     });
     document.getElementById('viewSuccess').classList.add('active');
+
+    // Dynamic button text based on user type
+    const btnLabels = {
+      individual: 'Start My First Case →',
+      lawyer: 'Go to My Dashboard →',
+      student: 'Start Researching →',
+      business: 'Start My First Case →',
+      journalist: 'Start My First Case →',
+      other: 'Get Started →'
+    };
+    const successBtn = document.getElementById('successBtn');
+    if (successBtn) successBtn.textContent = btnLabels[selectedType] || 'Get Started →';
 
   } catch(e) {
     showError(e.message || 'Signup failed. Please try again.');
