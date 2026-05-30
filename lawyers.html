@@ -284,6 +284,7 @@ html,body{min-height:100vh;background:var(--bg);color:var(--text);font-family:va
 .btn-full.whatsapp{background:rgba(37,211,102,0.12);color:#25d366;border:1px solid rgba(37,211,102,0.25)}
 .btn-full.outline{background:none;border:1px solid var(--border);color:var(--text2)}
 </style>
+<script src="https://unpkg.com/@supabase/supabase-js@2"></script>
 </head>
 <body>
 
@@ -703,6 +704,43 @@ function filterCards() {
     card.style.display = card.textContent.toLowerCase().includes(q) ? '' : 'none';
   });
 }
+
+// ── LIVE VERIFIED LAWYERS FROM SUPABASE ──
+// Only show lawyers with verification_status = 'verified'
+(async function loadVerifiedLawyers() {
+  if (!window.supabase) return; // supabase-js not loaded — skip
+  const SUPABASE_URL = 'https://qcutjnsxiawnejiqwwix.supabase.co';
+  const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFjdXRqbnN4aWF3bmVqaXF3d2l4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk1MzQzMzEsImV4cCI6MjA5NTExMDMzMX0.DNo2BtvdBzUgdLQaBytHcYHaHtyjh-ftERDqPBCT3RQ';
+  const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  try {
+    const { data } = await sb.from('profiles')
+      .select('id, full_name, state, experience, specializations, consultation_fee, profile_photo_url, verification_status')
+      .eq('user_type', 'lawyer')
+      .eq('verification_status', 'verified')
+      .limit(50);
+    if (!data || !data.length) return; // keep sample cards while no verified lawyers exist
+    // Insert real verified lawyers at the top of the grid
+    const container = document.getElementById('cardsContainer');
+    const realHtml = data.map(l => {
+      const init = (l.full_name||'?').split(' ').slice(0,2).map(p=>p[0]).join('').toUpperCase();
+      const fee = l.consultation_fee ? `₦${Number(l.consultation_fee).toLocaleString()}` : '—';
+      const specs = (l.specializations||[]).slice(0,3).map(s=>`<span class="tag">${s}</span>`).join('');
+      return `<div class="card" onclick="alert('Real-time verified lawyer profiles — full marketplace coming soon. Use AI Chat to request introductions.')">
+        <div class="card-top">
+          <div class="avatar">${init}</div>
+          <div class="card-info">
+            <h3>${l.full_name || 'Lawyer'} <span title="Verified" style="color:#22c55e;font-size:14px">✓</span></h3>
+            <p>${l.experience || 'Verified Lawyer'} · ${l.state || 'Nigeria'}</p>
+          </div>
+        </div>
+        <div class="card-stats"><div><strong>${fee}</strong><br><small>Consultation</small></div></div>
+        <div class="card-tags">${specs}</div>
+        <button class="btn-contact">View Profile</button>
+      </div>`;
+    }).join('');
+    container.insertAdjacentHTML('afterbegin', realHtml);
+  } catch (_) { /* silent — sample cards remain */ }
+})();
 </script>
 </body>
 </html>

@@ -1921,6 +1921,10 @@
         <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/></svg>
         Research Tools
       </a>
+      <a class="sidebar-nav-item" data-roles="lawyer" href="javascript:void(0)" onclick="closeSidebar();openVerification()">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+        Verification
+      </a>
     </div>
 
     <div class="sidebar-section-label">Recent</div>
@@ -4962,6 +4966,452 @@ function closeMyClients() {
   document.body.style.overflow = '';
 }
 
+// ══════════════════════════════════════════════════════
+// MESSAGING SYSTEM (FIX 6)
+// ══════════════════════════════════════════════════════
+let _activeConversationId = null;
+
+const ROLE_BADGES = {
+  lawyer:     { label: 'LAWYER',     bg: 'rgba(74,142,245,0.16)',  color: '#4a8ef5' },
+  student:    { label: 'STUDENT',    bg: 'rgba(167,139,250,0.16)', color: '#a78bfa' },
+  business:   { label: 'BUSINESS',   bg: 'rgba(34,197,94,0.16)',   color: '#22c55e' },
+  journalist: { label: 'JOURNALIST', bg: 'rgba(249,115,22,0.16)',  color: '#f97316' },
+  individual: { label: 'INDIVIDUAL', bg: 'rgba(6,182,212,0.16)',   color: '#06b6d4' },
+  other:      { label: 'USER',       bg: 'rgba(107,114,128,0.16)', color: '#9ca3af' }
+};
+
+function initials(name) {
+  if (!name) return '?';
+  const parts = name.trim().split(/\s+/).slice(0, 2);
+  return parts.map(p => p[0].toUpperCase()).join('');
+}
+
+function timeAgo(iso) {
+  if (!iso) return '';
+  const diff = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (diff < 60)    return 'just now';
+  if (diff < 3600)  return Math.floor(diff/60) + 'm ago';
+  if (diff < 86400) return Math.floor(diff/3600) + 'h ago';
+  if (diff < 604800) return Math.floor(diff/86400) + 'd ago';
+  return new Date(iso).toLocaleDateString('en-NG', { day:'numeric', month:'short' });
+}
+
+async function openMessages() {
+  const overlay = document.getElementById('messagesOverlay');
+  if (!overlay) return;
+  overlay.style.display = 'flex';
+  document.body.style.overflow = 'hidden';
+  const list = document.getElementById('messagesList');
+  list.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted)">Loading conversations…</div>';
+  await renderConversationsList();
+}
+
+function closeMessages() {
+  const overlay = document.getElementById('messagesOverlay');
+  if (overlay) overlay.style.display = 'none';
+  document.body.style.overflow = '';
+}
+
+async function renderConversationsList() {
+  const list = document.getElementById('messagesList');
+  if (!currentUser) { list.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted)">Please sign in</div>'; return; }
+  const { data: convs, error } = await sb
+    .from('conversations')
+    .select('*')
+    .or(`user_a.eq.${currentUser.id},user_b.eq.${currentUser.id}`)
+    .order('last_message_at', { ascending: false, nullsFirst: false });
+
+  if (error) { list.innerHTML = `<div style="text-align:center;padding:40px;color:#e8908a">${error.message}</div>`; return; }
+  if (!convs || !convs.length) {
+    list.innerHTML = `
+      <div style="text-align:center;padding:60px 20px">
+        <div style="font-size:48px;margin-bottom:14px;opacity:0.3">💬</div>
+        <div style="font-size:15px;font-weight:600;margin-bottom:6px;color:var(--text)">No conversations yet</div>
+        <div style="font-size:13px;color:var(--text-muted);max-width:300px;margin:0 auto;line-height:1.6">When you consult with lawyers or accept mentorship, conversations will appear here.</div>
+      </div>`;
+    return;
+  }
+
+  // Fetch participant profiles in bulk
+  const otherIds = convs.map(c => c.user_a === currentUser.id ? c.user_b : c.user_a);
+  const { data: profs } = await sb.from('profiles').select('id, full_name, user_type, verification_status').in('id', otherIds);
+  const profMap = {}; (profs || []).forEach(p => profMap[p.id] = p);
+
+  // Count unread per conversation
+  const { data: unreadRows } = await sb
+    .from('direct_messages')
+    .select('conversation_id')
+    .in('conversation_id', convs.map(c => c.id))
+    .neq('sender_id', currentUser.id)
+    .is('read_at', null);
+  const unreadCount = {};
+  (unreadRows || []).forEach(r => { unreadCount[r.conversation_id] = (unreadCount[r.conversation_id]||0) + 1; });
+
+  list.innerHTML = convs.map(c => {
+    const otherId = c.user_a === currentUser.id ? c.user_b : c.user_a;
+    const other = profMap[otherId] || { full_name: 'Unknown', user_type: 'other' };
+    const badge = ROLE_BADGES[other.user_type] || ROLE_BADGES.other;
+    const unread = unreadCount[c.id] || 0;
+    const last = c.last_message ? c.last_message.slice(0, 70) : (c.status === 'pending' ? '(pending acceptance)' : c.status === 'locked' ? '(locked — unlock to chat)' : 'Start the conversation');
+    const kindLabel = c.kind === 'mentorship' ? '🎓 Mentorship' : c.kind === 'inquiry' ? '💼 Inquiry' : '⚖️ Consultation';
+    return `<div onclick="openConversation('${c.id}')" style="display:flex;gap:12px;padding:14px;border-radius:12px;background:var(--surface-2);border:1px solid var(--border);margin-bottom:8px;cursor:pointer;align-items:flex-start" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'">
+      <div style="width:44px;height:44px;border-radius:50%;background:${badge.bg};display:flex;align-items:center;justify-content:center;font-weight:700;color:${badge.color};flex-shrink:0">${initials(other.full_name)}</div>
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">
+          <div style="font-size:14px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1">${other.full_name || 'Unknown'}</div>
+          <span style="font-size:9px;font-weight:700;padding:2px 7px;border-radius:8px;background:${badge.bg};color:${badge.color}">${badge.label}</span>
+          ${other.verification_status === 'verified' ? '<span title="Verified" style="color:#22c55e">✓</span>' : ''}
+        </div>
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:2px">${kindLabel}</div>
+        <div style="font-size:13px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${last}</div>
+      </div>
+      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0">
+        <div style="font-size:11px;color:var(--text-muted)">${timeAgo(c.last_message_at || c.created_at)}</div>
+        ${unread ? `<span style="background:var(--accent);color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px">${unread}</span>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+
+  updateMessageBadge();
+}
+
+async function updateMessageBadge() {
+  if (!currentUser) return;
+  const { data: convs } = await sb.from('conversations').select('id').or(`user_a.eq.${currentUser.id},user_b.eq.${currentUser.id}`);
+  if (!convs || !convs.length) return;
+  const { count } = await sb
+    .from('direct_messages')
+    .select('id', { count: 'exact', head: true })
+    .in('conversation_id', convs.map(c => c.id))
+    .neq('sender_id', currentUser.id)
+    .is('read_at', null);
+  const badge = document.getElementById('sidebarMsgBadge');
+  if (badge) {
+    if (count && count > 0) { badge.textContent = count; badge.style.display = 'inline-block'; }
+    else badge.style.display = 'none';
+  }
+}
+
+async function openConversation(convId) {
+  _activeConversationId = convId;
+  const overlay = document.getElementById('conversationOverlay');
+  if (!overlay) return;
+  overlay.style.display = 'flex';
+  document.body.style.overflow = 'hidden';
+
+  // Fetch conversation + other participant
+  const { data: conv } = await sb.from('conversations').select('*').eq('id', convId).single();
+  if (!conv) { overlay.style.display = 'none'; return; }
+  const otherId = conv.user_a === currentUser.id ? conv.user_b : conv.user_a;
+  const { data: other } = await sb.from('profiles').select('full_name, user_type, verification_status').eq('id', otherId).single();
+
+  const badge = ROLE_BADGES[other?.user_type] || ROLE_BADGES.other;
+  document.getElementById('convHeaderAvatar').textContent = initials(other?.full_name);
+  document.getElementById('convHeaderAvatar').style.background = badge.bg;
+  document.getElementById('convHeaderAvatar').style.color = badge.color;
+  document.getElementById('convHeaderName').textContent = other?.full_name || 'User';
+  document.getElementById('convHeaderMeta').innerHTML = `<span style="color:${badge.color}">${badge.label}</span> · ${conv.kind === 'mentorship' ? 'Mentorship' : conv.kind === 'inquiry' ? 'Inquiry' : 'Consultation'}${other?.verification_status === 'verified' ? ' · <span style="color:#22c55e">✓ Verified</span>' : ''}`;
+
+  // Header actions: if pending and current user is the receiver (lawyer), show accept/decline
+  const actions = document.getElementById('convHeaderActions');
+  actions.innerHTML = '';
+  if (conv.status === 'pending' && userProfile?.user_type === 'lawyer') {
+    actions.innerHTML = `
+      <button onclick="acceptConversation('${conv.id}')" style="background:#22c55e;color:#fff;border:none;padding:6px 12px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;margin-right:6px">Accept</button>
+      <button onclick="declineConversation('${conv.id}')" style="background:transparent;color:#e8908a;border:1px solid rgba(232,144,138,0.4);padding:6px 12px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer">Decline</button>
+    `;
+  }
+
+  // Input bar visibility
+  const inputBar = document.getElementById('convInputBar');
+  inputBar.style.display = conv.status === 'unlocked' ? 'flex' : 'none';
+
+  // Load thread
+  const thread = document.getElementById('convThread');
+  thread.innerHTML = '<div style="text-align:center;color:var(--text-muted);font-size:12px">Loading…</div>';
+
+  const { data: msgs } = await sb.from('direct_messages').select('*').eq('conversation_id', convId).order('created_at', { ascending: true });
+  if (!msgs || !msgs.length) {
+    thread.innerHTML = `<div style="text-align:center;padding:40px;color:var(--text-muted);font-size:13px">
+      ${conv.status === 'pending' ? 'Waiting for the other party to accept…' :
+        conv.status === 'locked' ? '🔒 This conversation is locked. Complete payment or acceptance to unlock.' :
+        'No messages yet — say hello.'}</div>`;
+  } else {
+    thread.innerHTML = msgs.map(m => {
+      const isMine = m.sender_id === currentUser.id;
+      return `<div style="display:flex;justify-content:${isMine?'flex-end':'flex-start'}">
+        <div style="max-width:78%;padding:9px 14px;border-radius:16px;background:${isMine?'var(--accent)':'var(--surface-2)'};color:${isMine?'#fff':'var(--text)'};font-size:14px;line-height:1.5;white-space:pre-wrap;word-break:break-word">${m.body.replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]))}</div>
+      </div>
+      <div style="font-size:10px;color:var(--text-muted);text-align:${isMine?'right':'left'};margin-top:-4px">${timeAgo(m.created_at)}${isMine?(m.read_at?' · Read':' · Sent'):''}</div>`;
+    }).join('');
+    thread.scrollTop = thread.scrollHeight;
+  }
+
+  // Mark unread messages as read
+  await sb.from('direct_messages').update({ read_at: new Date().toISOString() }).eq('conversation_id', convId).neq('sender_id', currentUser.id).is('read_at', null);
+  updateMessageBadge();
+}
+
+function closeConversation() {
+  document.getElementById('conversationOverlay').style.display = 'none';
+  _activeConversationId = null;
+  // Refresh inbox to reflect read receipts and latest order
+  if (document.getElementById('messagesOverlay').style.display === 'flex') renderConversationsList();
+}
+
+async function sendDirectMessage() {
+  if (!_activeConversationId) return;
+  const input = document.getElementById('convInput');
+  const body = input.value.trim();
+  if (!body) return;
+  input.value = '';
+  const { error } = await sb.from('direct_messages').insert({
+    conversation_id: _activeConversationId,
+    sender_id: currentUser.id,
+    body
+  });
+  if (error) { alert('Could not send: ' + error.message); return; }
+  await sb.from('conversations').update({ last_message: body.slice(0, 200), last_message_at: new Date().toISOString() }).eq('id', _activeConversationId);
+  openConversation(_activeConversationId);
+}
+
+async function acceptConversation(convId) {
+  const { error } = await sb.from('conversations').update({ status: 'unlocked' }).eq('id', convId);
+  if (error) { alert(error.message); return; }
+  openConversation(convId);
+}
+async function declineConversation(convId) {
+  if (!confirm('Decline this request? The other party will be notified.')) return;
+  await sb.from('conversations').update({ status: 'closed' }).eq('id', convId);
+  closeConversation();
+}
+
+// Allow Enter key to send
+document.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey && document.activeElement?.id === 'convInput') {
+    e.preventDefault();
+    sendDirectMessage();
+  }
+});
+
+// ══════════════════════════════════════════════════════
+// MENTORSHIP (FIX 5) — Students only
+// ══════════════════════════════════════════════════════
+async function openMentorship() {
+  const overlay = document.getElementById('mentorshipOverlay');
+  if (!overlay) return;
+  overlay.style.display = 'flex';
+  document.body.style.overflow = 'hidden';
+  const body = document.getElementById('mentorshipBody');
+  body.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted)">Loading mentorship…</div>';
+  await renderMentorshipBody();
+}
+function closeMentorship() {
+  document.getElementById('mentorshipOverlay').style.display = 'none';
+  document.body.style.overflow = '';
+}
+
+async function renderMentorshipBody() {
+  const body = document.getElementById('mentorshipBody');
+  // 1. My mentorship requests (sent)
+  const { data: myReqs } = await sb.from('mentorship_requests').select('*').eq('student_id', currentUser.id).order('created_at', { ascending: false });
+
+  // 2. Lawyers available for mentorship (verified lawyers only)
+  const { data: lawyers } = await sb
+    .from('profiles')
+    .select('id, full_name, specializations, experience, state, verification_status')
+    .eq('user_type', 'lawyer')
+    .eq('verification_status', 'verified')
+    .limit(20);
+
+  // 3. Get lawyer profiles for the requests
+  const reqLawyerIds = (myReqs || []).map(r => r.lawyer_id);
+  const { data: reqLawyers } = reqLawyerIds.length
+    ? await sb.from('profiles').select('id, full_name').in('id', reqLawyerIds)
+    : { data: [] };
+  const reqLawyerMap = {}; (reqLawyers || []).forEach(p => reqLawyerMap[p.id] = p);
+
+  let html = `<div style="max-width:780px;margin:0 auto">
+    <h3 style="font-size:18px;font-weight:700;margin:0 0 6px">Find a Mentor</h3>
+    <p style="font-size:13px;color:var(--text-muted);margin:0 0 18px">Connect with verified lawyers for free or low-cost mentorship. Lawyers can accept or decline your request.</p>`;
+
+  // Pending / decided requests
+  if (myReqs && myReqs.length) {
+    html += '<div style="margin-bottom:24px"><div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:10px">Your Requests</div>';
+    html += myReqs.map(r => {
+      const lawyer = reqLawyerMap[r.lawyer_id];
+      const sBadge = r.status === 'accepted' ? '<span style="background:rgba(34,197,94,0.16);color:#22c55e;padding:2px 9px;border-radius:10px;font-size:11px;font-weight:700">ACCEPTED</span>'
+        : r.status === 'declined' ? '<span style="background:rgba(232,144,138,0.16);color:#e8908a;padding:2px 9px;border-radius:10px;font-size:11px;font-weight:700">DECLINED</span>'
+        : '<span style="background:rgba(245,158,11,0.16);color:#f59e0b;padding:2px 9px;border-radius:10px;font-size:11px;font-weight:700">PENDING</span>';
+      return `<div style="background:var(--surface-2);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:8px;display:flex;align-items:center;gap:12px">
+        <div style="width:36px;height:36px;border-radius:50%;background:rgba(74,142,245,0.18);display:flex;align-items:center;justify-content:center;color:var(--accent);font-weight:700;font-size:13px">${initials(lawyer?.full_name)}</div>
+        <div style="flex:1">
+          <div style="font-size:14px;font-weight:600">${lawyer?.full_name || 'Lawyer'}</div>
+          <div style="font-size:12px;color:var(--text-muted)">Sent ${timeAgo(r.created_at)}</div>
+        </div>
+        ${sBadge}
+      </div>`;
+    }).join('');
+    html += '</div>';
+  }
+
+  // Available mentors
+  html += '<div><div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:10px">Available Mentors</div>';
+  if (!lawyers || !lawyers.length) {
+    html += '<div style="text-align:center;padding:30px;color:var(--text-muted);font-size:13px">No verified mentors available yet. Check back soon.</div>';
+  } else {
+    const pendingMap = {}; (myReqs || []).forEach(r => pendingMap[r.lawyer_id] = r.status);
+    html += lawyers.map(l => {
+      const status = pendingMap[l.id];
+      const disabled = status === 'pending' || status === 'accepted';
+      const btnLabel = status === 'pending' ? 'Pending…' : status === 'accepted' ? 'Connected' : status === 'declined' ? 'Resend Request' : 'Request Mentorship';
+      const specs = (l.specializations || []).slice(0, 3).join(', ');
+      return `<div style="background:var(--surface-2);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:10px;display:flex;gap:14px;align-items:flex-start">
+        <div style="width:48px;height:48px;border-radius:50%;background:rgba(74,142,245,0.18);display:flex;align-items:center;justify-content:center;color:var(--accent);font-weight:700;flex-shrink:0">${initials(l.full_name)}</div>
+        <div style="flex:1;min-width:0">
+          <div style="display:flex;align-items:center;gap:6px"><div style="font-size:14px;font-weight:700">${l.full_name || 'Lawyer'}</div><span style="color:#22c55e" title="Verified">✓</span></div>
+          <div style="font-size:12px;color:var(--text-muted);margin-top:2px">${l.experience || 'Experience N/A'}${l.state ? ' · ' + l.state : ''}</div>
+          ${specs ? `<div style="font-size:11px;color:var(--accent);margin-top:4px">${specs}</div>` : ''}
+        </div>
+        <button onclick="requestMentorship('${l.id}', '${(l.full_name||'').replace(/'/g, "\\'")}')" ${disabled?'disabled':''} style="background:${disabled?'var(--surface)':'var(--accent)'};color:${disabled?'var(--text-muted)':'#fff'};border:1px solid var(--border);padding:8px 14px;border-radius:8px;font-size:12px;font-weight:600;cursor:${disabled?'not-allowed':'pointer'};white-space:nowrap">${btnLabel}</button>
+      </div>`;
+    }).join('');
+  }
+  html += '</div></div>';
+  body.innerHTML = html;
+}
+
+async function requestMentorship(lawyerId, lawyerName) {
+  const msg = prompt(`Send a brief intro to ${lawyerName} (1-2 sentences about why you'd like mentorship):`);
+  if (!msg || !msg.trim()) return;
+  // Insert mentorship request — UNIQUE constraint means previous declined requests need to be deleted first
+  await sb.from('mentorship_requests').delete().eq('student_id', currentUser.id).eq('lawyer_id', lawyerId).eq('status', 'declined');
+  const { error } = await sb.from('mentorship_requests').insert({
+    student_id: currentUser.id, lawyer_id: lawyerId, message: msg.trim(), status: 'pending'
+  });
+  if (error) { alert('Could not send: ' + error.message); return; }
+  // Also create a pending conversation
+  await sb.from('conversations').upsert({
+    user_a: currentUser.id, user_b: lawyerId, kind: 'mentorship', status: 'pending',
+    last_message: msg.slice(0, 200), last_message_at: new Date().toISOString()
+  }, { onConflict: 'user_a,user_b,kind' });
+  alert('Request sent! You\'ll be notified when the lawyer responds.');
+  renderMentorshipBody();
+}
+
+// ══════════════════════════════════════════════════════
+// LAWYER VERIFICATION (FIX 7)
+// ══════════════════════════════════════════════════════
+async function openVerification() {
+  const overlay = document.getElementById('verificationOverlay');
+  if (!overlay) return;
+  overlay.style.display = 'flex';
+  document.body.style.overflow = 'hidden';
+  await renderVerificationBody();
+}
+function closeVerification() {
+  document.getElementById('verificationOverlay').style.display = 'none';
+  document.body.style.overflow = '';
+}
+
+async function renderVerificationBody() {
+  const body = document.getElementById('verificationBody');
+  const { data: p } = await sb.from('profiles').select('*').eq('id', currentUser.id).single();
+
+  const status = p?.verification_status || 'unverified';
+  const statusBadges = {
+    unverified: { label: 'Not Yet Submitted', bg: 'rgba(156,163,175,0.15)', color: '#9ca3af' },
+    pending:    { label: 'Pending Review',    bg: 'rgba(245,158,11,0.16)',  color: '#f59e0b' },
+    verified:   { label: 'Verified ✓',        bg: 'rgba(34,197,94,0.16)',   color: '#22c55e' },
+    rejected:   { label: 'Rejected',          bg: 'rgba(232,144,138,0.16)', color: '#e8908a' }
+  };
+  const sb_ = statusBadges[status];
+
+  let html = `<div style="background:var(--surface-2);border:1px solid var(--border);border-radius:12px;padding:18px;margin-bottom:20px">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
+      <h3 style="margin:0;font-size:16px;font-weight:700">Verification Status</h3>
+      <span style="background:${sb_.bg};color:${sb_.color};padding:4px 12px;border-radius:14px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em">${sb_.label}</span>
+    </div>`;
+
+  if (status === 'pending') {
+    html += '<p style="font-size:13px;color:var(--text-muted);margin:0">Your profile is under review. We will notify you once verified. This usually takes 24-72 hours.</p>';
+  } else if (status === 'verified') {
+    html += '<p style="font-size:13px;color:var(--text-muted);margin:0">Your profile is live in the marketplace. Clients and students can find and contact you.</p>';
+  } else if (status === 'rejected') {
+    html += `<p style="font-size:13px;color:#e8908a;margin:0 0 8px"><strong>Reason:</strong> ${p?.verification_rejection_reason || 'Please review and resubmit your documents.'}</p>
+      <p style="font-size:13px;color:var(--text-muted);margin:0">You can correct the issues and resubmit below.</p>`;
+  } else {
+    html += '<p style="font-size:13px;color:var(--text-muted);margin:0">Submit your documents to be verified and appear in the lawyer marketplace.</p>';
+  }
+  html += '</div>';
+
+  // Submission form (hidden if pending/verified)
+  if (status !== 'pending' && status !== 'verified') {
+    html += `<div style="background:var(--surface-2);border:1px solid var(--border);border-radius:12px;padding:18px">
+      <h3 style="margin:0 0 14px;font-size:15px;font-weight:700">Submit Documents</h3>
+
+      <div style="margin-bottom:14px">
+        <label style="display:block;font-size:12px;font-weight:600;color:var(--text-muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.04em">NBA Membership Number</label>
+        <input id="vfNba" value="${p?.nba_number || ''}" placeholder="e.g. NBA/SCN/00000" style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:14px;box-sizing:border-box">
+      </div>
+
+      <div style="margin-bottom:14px">
+        <label style="display:block;font-size:12px;font-weight:600;color:var(--text-muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.04em">Law School Attended</label>
+        <input id="vfSchool" value="${p?.law_school || ''}" placeholder="e.g. Nigerian Law School, Bwari" style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:14px;box-sizing:border-box">
+      </div>
+
+      <div style="margin-bottom:14px">
+        <label style="display:block;font-size:12px;font-weight:600;color:var(--text-muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.04em">Consultation Fee (₦ / 30 min)</label>
+        <input id="vfFee" type="number" value="${p?.consultation_fee || ''}" placeholder="e.g. 5000" style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:14px;box-sizing:border-box">
+      </div>
+
+      <div style="margin-bottom:14px">
+        <label style="display:block;font-size:12px;font-weight:600;color:var(--text-muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.04em">States Covered (comma separated)</label>
+        <input id="vfStates" value="${(p?.states_covered||[]).join(', ')}" placeholder="e.g. Lagos, FCT - Abuja, Rivers" style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:14px;box-sizing:border-box">
+      </div>
+
+      <div style="margin-bottom:14px">
+        <label style="display:block;font-size:12px;font-weight:600;color:var(--text-muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.04em">Profile Photo URL</label>
+        <input id="vfPhoto" value="${p?.profile_photo_url || ''}" placeholder="Direct image URL (https://...)" style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:14px;box-sizing:border-box">
+      </div>
+
+      <div style="margin-bottom:14px">
+        <label style="display:block;font-size:12px;font-weight:600;color:var(--text-muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.04em">Call to Bar Certificate URL</label>
+        <input id="vfBar" value="${p?.bar_cert_url || ''}" placeholder="Upload to Drive/Dropbox and paste the link" style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:14px;box-sizing:border-box">
+      </div>
+
+      <div style="margin-bottom:18px">
+        <label style="display:block;font-size:12px;font-weight:600;color:var(--text-muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.04em">Government ID URL</label>
+        <input id="vfId" value="${p?.govt_id_url || ''}" placeholder="National ID, Passport or Driver's Licence" style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:14px;box-sizing:border-box">
+      </div>
+
+      <button onclick="submitVerification()" style="background:var(--accent);color:#fff;border:none;padding:12px 24px;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;width:100%">Submit for Review</button>
+    </div>`;
+  }
+
+  body.innerHTML = html;
+}
+
+async function submitVerification() {
+  const nba    = document.getElementById('vfNba').value.trim();
+  const school = document.getElementById('vfSchool').value.trim();
+  const fee    = parseInt(document.getElementById('vfFee').value, 10) || null;
+  const states = document.getElementById('vfStates').value.split(',').map(s => s.trim()).filter(Boolean);
+  const photo  = document.getElementById('vfPhoto').value.trim();
+  const bar    = document.getElementById('vfBar').value.trim();
+  const idUrl  = document.getElementById('vfId').value.trim();
+  if (!nba || !school || !photo || !bar || !idUrl) { alert('All fields are required for verification.'); return; }
+  const { error } = await sb.from('profiles').update({
+    nba_number: nba, law_school: school, consultation_fee: fee, states_covered: states,
+    profile_photo_url: photo, bar_cert_url: bar, govt_id_url: idUrl,
+    verification_status: 'pending', verification_submitted_at: new Date().toISOString(),
+    verification_rejection_reason: null
+  }).eq('id', currentUser.id);
+  if (error) { alert('Submission failed: ' + error.message); return; }
+  alert('Submitted! Your profile is under review. We will notify you once verified.');
+  renderVerificationBody();
+}
+
 function openResearchTools() {
   const overlay = document.getElementById('researchOverlay');
   if (!overlay) return;
@@ -5181,6 +5631,10 @@ async function initApp() {
     if (profileData) userProfile = profileData;
   } catch(_) {}
   applyRoleNav();
+  // Load messaging badge in background
+  updateMessageBadge().catch(() => {});
+  // Poll badge every 30s
+  setInterval(() => updateMessageBadge().catch(() => {}), 30000);
 
   const name = user.user_metadata?.full_name || user.email.split('@')[0];
   const firstName = name.split(' ')[0];
@@ -5717,6 +6171,55 @@ function openSettings() {
 </script>
 
 <!-- ── MY CLIENTS OVERLAY (Lawyers only) ── -->
+<!-- ── MESSAGES INBOX OVERLAY ── -->
+<div id="messagesOverlay" style="display:none;position:fixed;inset:0;z-index:5300;background:var(--bg);flex-direction:column;overflow:hidden">
+  <div style="display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--border);flex-shrink:0;background:var(--surface)">
+    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" style="width:20px;height:20px;opacity:0.75"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"/></svg>
+    <h2 style="flex:1;margin:0;font-size:17px;font-weight:700">Messages</h2>
+    <button onclick="closeMessages()" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:20px;padding:4px 8px;border-radius:6px">✕</button>
+  </div>
+  <div id="messagesList" style="flex:1;overflow-y:auto;padding:14px"></div>
+</div>
+
+<!-- ── CONVERSATION OVERLAY ── -->
+<div id="conversationOverlay" style="display:none;position:fixed;inset:0;z-index:5400;background:var(--bg);flex-direction:column;overflow:hidden">
+  <div style="display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--border);flex-shrink:0;background:var(--surface)">
+    <button onclick="closeConversation()" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:18px;padding:4px 8px;border-radius:6px">←</button>
+    <div id="convHeaderAvatar" style="width:36px;height:36px;border-radius:50%;background:rgba(74,142,245,0.18);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;color:var(--accent);flex-shrink:0"></div>
+    <div style="flex:1;min-width:0">
+      <div id="convHeaderName" style="font-size:14px;font-weight:700;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></div>
+      <div id="convHeaderMeta" style="font-size:11px;color:var(--text-muted)"></div>
+    </div>
+    <div id="convHeaderActions"></div>
+  </div>
+  <div id="convThread" style="flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:8px"></div>
+  <div id="convInputBar" style="border-top:1px solid var(--border);padding:10px 14px;background:var(--surface);display:flex;gap:8px">
+    <input id="convInput" placeholder="Type a message…" style="flex:1;padding:10px 14px;border-radius:20px;border:1px solid var(--border);background:var(--surface-2);color:var(--text);font-size:14px;outline:none">
+    <button onclick="sendDirectMessage()" style="background:var(--accent);color:#fff;border:none;padding:8px 18px;border-radius:20px;cursor:pointer;font-weight:600">Send</button>
+  </div>
+</div>
+
+<!-- ── MENTORSHIP OVERLAY (Students only) ── -->
+<div id="mentorshipOverlay" style="display:none;position:fixed;inset:0;z-index:5350;background:var(--bg);flex-direction:column;overflow:hidden">
+  <div style="display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--border);flex-shrink:0;background:var(--surface)">
+    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" style="width:20px;height:20px;opacity:0.75"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 14l9-5-9-5-9 5 9 5z"/></svg>
+    <h2 style="flex:1;margin:0;font-size:17px;font-weight:700">Mentorship</h2>
+    <span style="padding:3px 10px;border-radius:14px;font-size:11px;font-weight:700;background:rgba(167,139,250,0.16);color:#a78bfa;border:1px solid rgba(167,139,250,0.3)">STUDENT</span>
+    <button onclick="closeMentorship()" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:20px;padding:4px 8px;border-radius:6px">✕</button>
+  </div>
+  <div id="mentorshipBody" style="flex:1;overflow-y:auto;padding:18px"></div>
+</div>
+
+<!-- ── VERIFICATION SUBMISSION OVERLAY (Lawyers only) ── -->
+<div id="verificationOverlay" style="display:none;position:fixed;inset:0;z-index:5500;background:var(--bg);flex-direction:column;overflow:hidden">
+  <div style="display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--border);flex-shrink:0;background:var(--surface)">
+    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" style="width:20px;height:20px;opacity:0.75"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+    <h2 style="flex:1;margin:0;font-size:17px;font-weight:700">Lawyer Verification</h2>
+    <button onclick="closeVerification()" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:20px;padding:4px 8px;border-radius:6px">✕</button>
+  </div>
+  <div id="verificationBody" style="flex:1;overflow-y:auto;padding:20px;max-width:680px;margin:0 auto;width:100%;box-sizing:border-box"></div>
+</div>
+
 <div id="myClientsOverlay" style="display:none;position:fixed;inset:0;z-index:5200;background:var(--bg);flex-direction:column;overflow:hidden">
   <div style="display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--border);flex-shrink:0;background:var(--surface)">
     <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" style="width:20px;height:20px;opacity:0.7"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
