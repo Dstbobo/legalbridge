@@ -2816,14 +2816,13 @@ async function send() {
         let parsedText = '';
         let sseBuffer = '';
 
-        // Initial drafting indicator for documents
+        // Simple drafting spinner — proven from earlier working build
         if (isDocument) {
-          _sDiv.innerHTML = '<div style="display:flex;align-items:center;gap:10px;padding:14px;background:var(--surface-2);border:1px solid var(--border);border-radius:10px"><div class="dots" style="display:flex;gap:3px"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div><div style="font-size:13px;color:var(--accent);font-weight:600">Drafting your document…</div></div>';
+          _sDiv.innerHTML = '<div style="color:var(--accent);font-style:italic;padding:8px 0">📄 Drafting your legal document...</div>';
         }
 
         // Track if the AI is asking for more details rather than generating
         let _needDetails = false;
-        let _lastDocPreviewUpdate = 0;
 
         while (true) {
           const { done, value } = await reader.read();
@@ -2839,26 +2838,18 @@ async function send() {
               const ssj = JSON.parse(ssData);
               if (ssj.text) {
                 parsedText += ssj.text;
-                // Detect details-request response (set on first chunk)
+                // Detect details-request response — switches us to conversational rendering
                 if (!_needDetails && parsedText.trimStart().startsWith('NEED_DETAILS:')) {
                   _needDetails = true;
-                  isDocument = false; // details requests are conversational
                 }
+                // Only re-render mid-stream for conversational or details mode; documents
+                // stay on the spinner until the card replaces them after the stream ends.
                 if (!isDocument || _needDetails) {
-                  // Stream as regular chat text (strip the prefix)
                   const display = _needDetails
                     ? parsedText.replace(/^NEED_DETAILS:\s*/i, '')
                     : parsedText;
                   _sDiv.innerHTML = mdToHtml(display);
                   scrollDown();
-                } else {
-                  // Document mode — throttled preview showing word count
-                  const now = Date.now();
-                  if (now - _lastDocPreviewUpdate > 250) {
-                    _lastDocPreviewUpdate = now;
-                    const words = parsedText.trim().split(/\s+/).length;
-                    _sDiv.innerHTML = '<div style="display:flex;align-items:center;gap:12px;padding:14px;background:var(--surface-2);border:1px solid var(--border);border-radius:10px"><div class="dots" style="display:flex;gap:3px"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div><div><div style="font-size:13px;color:var(--accent);font-weight:600">Drafting your document…</div><div style="font-size:11px;color:var(--text-muted);margin-top:2px">' + words.toLocaleString() + ' words generated</div></div></div>';
-                  }
                 }
               }
             } catch {}
@@ -2867,26 +2858,12 @@ async function send() {
 
         reply = parsedText;
 
-        // ── CONTENT-PATTERN FALLBACK ──
-        // If the AI returned something that LOOKS like a formal legal document
-        // (long, has a title/heading, contains classic doc phrases) treat it as
-        // a document even if intent detection missed it.
-        if (!isDocument && !_needDetails && parsedText) {
-          const looksLikeDoc = parsedText.length > 600 && (
-            /^#{1,2}\s+[A-Z][A-Z\s]{5,}/m.test(parsedText) ||
-            /\b(AFFIDAVIT|AGREEMENT|DEED|PETITION|MOTION|WRIT|NOTICE TO QUIT|MEMORANDUM|TENANCY|LEASE|POWER OF ATTORNEY|STATUTORY DECLARATION|WHEREAS|NOW THIS\s+DEED|BETWEEN|IN THE\s+(HIGH|FEDERAL|SUPREME|MAGISTRATE)\s+COURT|TAKE NOTICE)\b/.test(parsedText) &&
-            /\bsigned|signature|sworn|deponent|signature\s+of|date[d]?\s*[:_]/i.test(parsedText)
-          );
-          if (looksLikeDoc) isDocument = true;
-        }
-
-        // ── NEED_DETAILS branch — treat as conversational, no viewer ──
+        // ── NEED_DETAILS branch — treat as conversational, no viewer, no card ──
         if (_needDetails) {
           const cleaned = reply.replace(/^NEED_DETAILS:\s*/i, '').trim();
           _sDiv.innerHTML = mdToHtml(cleaned) + _ACTIONS;
           scrollDown();
-          // Store the full reply (with NEED_DETAILS: prefix) so the router can
-          // recognise the document conversation is in progress on the NEXT turn
+          // Store full reply (with prefix) so router recognises the in-progress doc convo
           history.push({ role: 'assistant', content: reply });
           saveTurn(text, reply).catch(() => {});
           busy = false;
@@ -2894,42 +2871,41 @@ async function send() {
           return;
         }
 
-        // Auto-fill date placeholders before display/save
+        // Auto-fill date placeholders before display/save (pure post-process)
         parsedText = fillDatePlaceholders(parsedText);
         reply = parsedText;
 
-        // Smart title: pass the original user message so the type can be inferred
+        // Smart title based on user message + content (pure post-process)
         const docTitleClean = extractDocTitle(parsedText, text);
 
         if (isDocument && parsedText) {
           // Open A4 viewer immediately
           openDocViewer(parsedText, parsedText, docTitleClean);
 
-          // Compact document card with title, word count, viewer + Word buttons
+          // Register doc content under a card-id so the per-card buttons can
+          // reach it reliably even when many cards exist (no fragile inline strings)
+          window._lbDocs = window._lbDocs || {};
           const _cardId = 'dc' + Date.now();
+          window._lbDocs[_cardId] = { content: parsedText, title: docTitleClean };
           const _wc = parsedText.trim().split(/\s+/).length;
-          const _safeTitle = docTitleClean.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+
+          // Compact 3-button card — Open in Viewer, Word, PDF
           _sDiv.innerHTML =
             '<div id="' + _cardId + '" style="background:var(--surface-2);border:1px solid var(--border);border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:10px">'
               + '<div style="display:flex;align-items:center;gap:12px">'
                 + '<div style="width:44px;height:44px;border-radius:10px;background:rgba(74,142,245,0.15);display:flex;align-items:center;justify-content:center;font-size:22px;flex-shrink:0">📄</div>'
                 + '<div style="flex:1;min-width:0">'
                   + '<div style="font-size:14px;font-weight:700;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + docTitleClean + '</div>'
-                  + '<div class="doc-save-status" style="font-size:11px;color:var(--text-muted);margin-top:2px">Saving… · ' + _wc.toLocaleString() + ' words</div>'
+                  + '<div class="doc-save-status" style="font-size:11px;color:var(--text-muted);margin-top:2px">Saving… &middot; ' + _wc.toLocaleString() + ' words</div>'
                 + '</div>'
               + '</div>'
-              + '<div style="display:flex;gap:8px">'
-                + '<button onclick="openDocViewer(this.parentElement.parentElement.dataset.raw, this.parentElement.parentElement.dataset.raw, this.parentElement.parentElement.dataset.title)" style="flex:1;background:var(--accent);color:#fff;border:none;padding:9px 14px;border-radius:8px;cursor:pointer;font-size:12px;font-weight:600">↗ Open in Viewer</button>'
-                + '<button onclick="(function(t,b){_docRawText=t;_docTitle=b;downloadDocx()}).call(null, this.parentElement.parentElement.dataset.raw, this.parentElement.parentElement.dataset.title.replace(/[^a-zA-Z0-9_\\- ]/g,\'_\'))" style="flex:1;background:rgba(255,255,255,0.06);color:var(--text);border:1px solid var(--border);padding:9px 14px;border-radius:8px;cursor:pointer;font-size:12px;font-weight:600">⬇ Word</button>'
+              + '<div style="display:flex;gap:6px;flex-wrap:wrap">'
+                + '<button onclick="openCardDoc(\'' + _cardId + '\')" style="flex:1;min-width:110px;background:var(--accent);color:#fff;border:none;padding:9px 12px;border-radius:8px;cursor:pointer;font-size:12px;font-weight:600">↗ Open in Viewer</button>'
+                + '<button onclick="downloadCardDocx(\'' + _cardId + '\')" style="flex:1;min-width:90px;background:rgba(255,255,255,0.06);color:var(--text);border:1px solid var(--border);padding:9px 12px;border-radius:8px;cursor:pointer;font-size:12px;font-weight:600">⬇ Word</button>'
+                + '<button onclick="downloadCardPDF(\'' + _cardId + '\')" style="flex:1;min-width:80px;background:rgba(255,255,255,0.06);color:var(--text);border:1px solid var(--border);padding:9px 12px;border-radius:8px;cursor:pointer;font-size:12px;font-weight:600">⬇ PDF</button>'
               + '</div>'
             + '</div>'
             + _ACTIONS;
-          // Store full content on the card so the buttons can reach it
-          const _cardEl = document.getElementById(_cardId);
-          if (_cardEl) {
-            _cardEl.dataset.raw = parsedText;
-            _cardEl.dataset.title = _safeTitle;
-          }
 
           scrollDown();
           // Full content in history so AI has context for follow-up questions
@@ -3120,6 +3096,39 @@ async function loadUserDocuments() {
   } catch(e) {
     container.innerHTML = '<div style="text-align:center;padding:20px;color:#e8908a;font-size:13px">Failed to load documents<br><small>' + (e.message || '') + '</small></div>';
   }
+}
+
+// ── Per-card document button handlers ──
+// Each generated document is registered in window._lbDocs[cardId] so the
+// card's buttons keep working regardless of how many other cards exist.
+function _getCardDoc(cardId) {
+  return (window._lbDocs && window._lbDocs[cardId]) || null;
+}
+function openCardDoc(cardId) {
+  const d = _getCardDoc(cardId);
+  if (!d) { alert('Document content unavailable — please try regenerating.'); return; }
+  openDocViewer(d.content, d.content, d.title);
+}
+async function downloadCardDocx(cardId) {
+  const d = _getCardDoc(cardId);
+  if (!d) { alert('Document content unavailable.'); return; }
+  if (!window.docx) { alert('Word export is loading, please try again in a moment'); return; }
+  // Load content into the viewer's hidden state and trigger the existing exporter
+  _docRawText = d.content;
+  _docTitle = (d.title || 'LegalBridge_Document').replace(/[^a-zA-Z0-9_\- ]/g, '_');
+  // Render into #docA4 so downloadDocx() (which reads from it) has the latest content
+  const a4 = document.getElementById('docA4');
+  if (a4) a4.innerHTML = (typeof formatLegalDocHtml === 'function') ? formatLegalDocHtml(d.content) : mdToHtml(d.content);
+  await downloadDocx();
+}
+function downloadCardPDF(cardId) {
+  const d = _getCardDoc(cardId);
+  if (!d) { alert('Document content unavailable.'); return; }
+  _docRawText = d.content;
+  _docTitle = (d.title || 'LegalBridge_Document').replace(/[^a-zA-Z0-9_\- ]/g, '_');
+  const a4 = document.getElementById('docA4');
+  if (a4) a4.innerHTML = (typeof formatLegalDocHtml === 'function') ? formatLegalDocHtml(d.content) : mdToHtml(d.content);
+  downloadDocPDF();
 }
 
 async function downloadSavedDocx(docId, title, btn) {
@@ -4388,29 +4397,27 @@ async function startDocumentFlow(docType) {
         // Open A4 viewer immediately
         openDocViewer(reply, reply, docTitle);
 
-        // Compact document card: title, word count, Open in Viewer + Word buttons
+        // Register doc + render compact 3-button card (same pattern as send())
+        window._lbDocs = window._lbDocs || {};
         const _cardId = 'dc' + Date.now();
+        window._lbDocs[_cardId] = { content: reply, title: docTitle };
         const _wc = reply.trim().split(/\s+/).length;
-        const _safeTitle = docTitle.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+
         _dDiv.innerHTML =
           '<div id="' + _cardId + '" style="background:var(--surface-2);border:1px solid var(--border);border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:10px">'
             + '<div style="display:flex;align-items:center;gap:12px">'
               + '<div style="width:44px;height:44px;border-radius:10px;background:rgba(74,142,245,0.15);display:flex;align-items:center;justify-content:center;font-size:22px;flex-shrink:0">📄</div>'
               + '<div style="flex:1;min-width:0">'
                 + '<div style="font-size:14px;font-weight:700;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + docTitle + '</div>'
-                + '<div class="doc-save-status" style="font-size:11px;color:var(--text-muted);margin-top:2px">Saving… · ' + _wc.toLocaleString() + ' words</div>'
+                + '<div class="doc-save-status" style="font-size:11px;color:var(--text-muted);margin-top:2px">Saving… &middot; ' + _wc.toLocaleString() + ' words</div>'
               + '</div>'
             + '</div>'
-            + '<div style="display:flex;gap:8px">'
-              + '<button onclick="openDocViewer(this.parentElement.parentElement.dataset.raw, this.parentElement.parentElement.dataset.raw, this.parentElement.parentElement.dataset.title)" style="flex:1;background:var(--accent);color:#fff;border:none;padding:9px 14px;border-radius:8px;cursor:pointer;font-size:12px;font-weight:600">↗ Open in Viewer</button>'
-              + '<button onclick="(function(t,b){_docRawText=t;_docTitle=b;downloadDocx()}).call(null, this.parentElement.parentElement.dataset.raw, this.parentElement.parentElement.dataset.title.replace(/[^a-zA-Z0-9_\\- ]/g,\'_\'))" style="flex:1;background:rgba(255,255,255,0.06);color:var(--text);border:1px solid var(--border);padding:9px 14px;border-radius:8px;cursor:pointer;font-size:12px;font-weight:600">⬇ Word</button>'
+            + '<div style="display:flex;gap:6px;flex-wrap:wrap">'
+              + '<button onclick="openCardDoc(\'' + _cardId + '\')" style="flex:1;min-width:110px;background:var(--accent);color:#fff;border:none;padding:9px 12px;border-radius:8px;cursor:pointer;font-size:12px;font-weight:600">↗ Open in Viewer</button>'
+              + '<button onclick="downloadCardDocx(\'' + _cardId + '\')" style="flex:1;min-width:90px;background:rgba(255,255,255,0.06);color:var(--text);border:1px solid var(--border);padding:9px 12px;border-radius:8px;cursor:pointer;font-size:12px;font-weight:600">⬇ Word</button>'
+              + '<button onclick="downloadCardPDF(\'' + _cardId + '\')" style="flex:1;min-width:80px;background:rgba(255,255,255,0.06);color:var(--text);border:1px solid var(--border);padding:9px 12px;border-radius:8px;cursor:pointer;font-size:12px;font-weight:600">⬇ PDF</button>'
             + '</div>'
           + '</div>';
-        const _cardEl = document.getElementById(_cardId);
-        if (_cardEl) {
-          _cardEl.dataset.raw = reply;
-          _cardEl.dataset.title = _safeTitle;
-        }
 
         scrollDown();
         history.push({ role: 'assistant', content: reply });
