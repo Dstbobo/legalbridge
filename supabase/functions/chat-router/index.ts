@@ -24,7 +24,7 @@ const CORS = {
 // ══════════════════════════════════════════════════════
 // INTENT DETECTION — routes to correct function
 // ══════════════════════════════════════════════════════
-function detectIntent(message: string, hasImages: boolean): string {
+function detectIntent(message: string, hasImages: boolean, history: any[] = []): string {
   if (hasImages) {
     // Images with evidence keywords → chat-evidence
     if (/\b(evidence|exhibit|admissib|court|chain of custody|forgery|authentic|fingerprint|forensic|prove|proof)\b/i.test(message)) {
@@ -36,6 +36,24 @@ function detectIntent(message: string, hasImages: boolean): string {
 
   const m = message.toLowerCase().trim();
 
+  // ── CONTEXT-AWARE DOCUMENT CONTINUATION ──
+  // If the last assistant message asked for document details (NEED_DETAILS
+  // marker, or "please provide" + numbered list), and the user is now replying
+  // with those details, continue routing to the documents function so the
+  // actual draft is produced.
+  const lastAssistant = [...history].reverse().find((h: any) => h.role === 'assistant');
+  if (lastAssistant) {
+    const a = (lastAssistant.content || '').slice(0, 1200);
+    const askedForDetails =
+      /NEED_DETAILS\s*:/i.test(a) ||
+      (/\bI can draft\b.*\b(please provide|need .* details)/is.test(a)) ||
+      (/^\s*\d+\.\s+/m.test(a) && /\b(landlord|tenant|deponent|petitioner|respondent|address|amount|rent|name|full name|date|signature)\b/i.test(a));
+    if (askedForDetails && m.length > 5) {
+      // Treat the user's response as the document details payload
+      return 'documents';
+    }
+  }
+
   // ── LIVE SEARCH (must check before legal) ──
   if (/\b(latest|recent|current|today|new law|new act|just passed|2024|2025|2026|amendment|breaking|news|update|gazette|just enacted|recently signed)\b/i.test(m)) {
     return 'search';
@@ -46,8 +64,10 @@ function detectIntent(message: string, hasImages: boolean): string {
     return 'evidence';
   }
 
-  // ── DOCUMENT DRAFTING ──
-  if (/\b(draft|prepare|write|generate)\b.{0,30}\b(affidavit|agreement|contract|deed|petition|motion|writ|notice|memo|memorandum|letter of demand|tenancy agreement|employment contract|divorce petition|power of attorney|resolution|MOU)\b/i.test(m)) {
+  // ── DOCUMENT DRAFTING — broad coverage ──
+  const draftVerbs = /\b(draft|prepare|write|generate|create|produce|make|compose|prepare me|do up)\b/i;
+  const docNouns = /\b(affidavit|agreement|contract|deed|petition|motion|writ|notice|memo(randum)?|letter|tenancy|lease|employment|offer\s+letter|divorce|petition\s+for\s+dissolution|power\s+of\s+attorney|MOU|NDA|non.?disclosure|consultancy|partnership|shareholders?|service\s+agreement|will|codicil|undertaking|guarantee|indemnity|loan\s+agreement|promissory\s+note|policy|terms\s+of\s+(use|service)|privacy\s+policy|cease\s+and\s+desist|demand\s+letter|FOI\s+request|quit\s+notice|application|resolution|complaint|cover\s+letter|termination|warning)\b/i;
+  if (draftVerbs.test(m) && docNouns.test(m)) {
     return 'documents';
   }
 
@@ -236,7 +256,7 @@ serve(async (req) => {
 
     // ── DETECT INTENT ──
     const hasImages = images && images.length > 0;
-    const intent = detectIntent(message, hasImages);
+    const intent = detectIntent(message, hasImages, history);
 
     // Message persistence is handled by the frontend's saveTurn.
     // Router only updates message_count so auto-summarize thresholds stay accurate.

@@ -2885,8 +2885,10 @@ async function send() {
           const cleaned = reply.replace(/^NEED_DETAILS:\s*/i, '').trim();
           _sDiv.innerHTML = mdToHtml(cleaned) + _ACTIONS;
           scrollDown();
-          history.push({ role: 'assistant', content: cleaned });
-          saveTurn(text, cleaned).catch(() => {});
+          // Store the full reply (with NEED_DETAILS: prefix) so the router can
+          // recognise the document conversation is in progress on the NEXT turn
+          history.push({ role: 'assistant', content: reply });
+          saveTurn(text, reply).catch(() => {});
           busy = false;
           document.getElementById('sendBtn').disabled = false;
           return;
@@ -6088,7 +6090,9 @@ async function openChat(chatId, title, el) {
       if (matchedDoc) {
         renderDocRow(matchedDoc.id, matchedDoc.title);
       } else {
-        const html = m.content.includes('<') ? m.content : mdToHtml(m.content);
+        // Strip the internal NEED_DETAILS: routing marker before display
+        const displayContent = m.content.replace(/^NEED_DETAILS:\s*/i, '');
+        const html = displayContent.includes('<') ? displayContent : mdToHtml(displayContent);
         addAI(html);
       }
     }
