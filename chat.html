@@ -1893,7 +1893,7 @@
         <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 14l9-5-9-5-9 5 9 5z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 14l6.16-3.422a12.083 12.083 0 01.665 6.479A11.952 11.952 0 0012 20.055a11.952 11.952 0 00-6.824-2.998 12.078 12.078 0 01.665-6.479L12 14z"/></svg>
         Mentorship
       </a>
-      <a class="sidebar-nav-item" data-roles="all" href="#" onclick="closeSidebar()">
+      <a class="sidebar-nav-item" data-roles="all" href="javascript:void(0)" onclick="openCasesOrResearch()">
         <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
         <span id="sidebarCasesLabel">My Cases</span>
       </a>
@@ -4463,6 +4463,7 @@ function switchTab(tab) {
       closeConversation && closeConversation();
       closeMentorship && closeMentorship();
       closeVerification && closeVerification();
+      closeMyResearch && closeMyResearch();
       break;
     case 'lawyers':
       window.location.href = 'lawyers.html';
@@ -5019,6 +5020,144 @@ function timeAgo(iso) {
   if (diff < 86400) return Math.floor(diff/3600) + 'h ago';
   if (diff < 604800) return Math.floor(diff/86400) + 'd ago';
   return new Date(iso).toLocaleDateString('en-NG', { day:'numeric', month:'short' });
+}
+
+// ══════════════════════════════════════════════════════
+// MY RESEARCH PAGE (Law Students only)
+// ══════════════════════════════════════════════════════
+// Top-level dispatcher: students get the Research page, everyone else just
+// closes the sidebar (the existing "Recent" list in the sidebar shows cases).
+function openCasesOrResearch() {
+  const type = userProfile?.user_type || 'other';
+  closeSidebar();
+  if (type === 'student') {
+    openMyResearch();
+  }
+  // Non-students: sidebar shows their recent cases inline; closing is enough.
+}
+
+let _rpActiveTab = 'all';
+
+function openMyResearch() {
+  const overlay = document.getElementById('researchPageOverlay');
+  if (!overlay) return;
+  overlay.style.display = 'flex';
+  document.body.style.overflow = 'hidden';
+  renderResearchPage(_rpActiveTab || 'all');
+}
+
+function closeMyResearch() {
+  const overlay = document.getElementById('researchPageOverlay');
+  if (overlay) overlay.style.display = 'none';
+  document.body.style.overflow = '';
+}
+
+function newResearchSession() {
+  closeMyResearch();
+  // Reset chat to a fresh session
+  currentChatId = null;
+  history = [];
+  document.getElementById('messagesInner').innerHTML = '';
+  if (typeof populateStarterCards === 'function') {
+    // Show welcome with role-specific starter cards
+    document.getElementById('messagesInner').innerHTML = `
+      <div class="welcome" id="welcomeState">
+        <div class="welcome-glyph">LB</div>
+        <h1>Start a new research session</h1>
+        <p style="opacity:0.6;max-width:340px;margin:0 auto">Ask about a Nigerian case, statute, principle, or essay topic.</p>
+        <div class="starters" id="starterCards"></div>
+      </div>`;
+    populateStarterCards();
+  }
+}
+
+function classifyResearch(title) {
+  if (!title) return 'notes';
+  const t = title.toLowerCase();
+  if (/\bv[\.\s]|\bcase\b|nwlr|lpelr|fwlr|appeal|sc\b|judgment|ratio|precedent/i.test(t)) return 'case';
+  return 'notes';
+}
+
+async function renderResearchPage(tab) {
+  _rpActiveTab = tab || 'all';
+  // Update tab pill styling
+  ['All', 'Case', 'Notes'].forEach(t => {
+    const el = document.getElementById('rpTab' + t);
+    if (el) el.classList.toggle('active', t.toLowerCase() === _rpActiveTab || (t === 'All' && _rpActiveTab === 'all'));
+  });
+  const body = document.getElementById('researchPageBody');
+  body.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted)">Loading your research…</div>';
+
+  try {
+    if (!currentUser) { body.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted)">Please sign in.</div>'; return; }
+    const { data: chats, error } = await sb
+      .from('chats')
+      .select('id, title, summary, message_count, updated_at, created_at')
+      .eq('user_id', currentUser.id)
+      .order('updated_at', { ascending: false })
+      .limit(200);
+    if (error) throw error;
+
+    let items = chats || [];
+    if (_rpActiveTab !== 'all') {
+      items = items.filter(c => classifyResearch(c.title) === _rpActiveTab);
+    }
+
+    if (!items.length) {
+      body.innerHTML = `
+        <div style="text-align:center;padding:60px 20px">
+          <div style="font-size:48px;margin-bottom:14px;opacity:0.3">📚</div>
+          <div style="font-size:16px;font-weight:600;margin-bottom:6px;color:var(--text)">No research sessions yet</div>
+          <div style="font-size:13px;color:var(--text-muted);max-width:340px;margin:0 auto;line-height:1.6">
+            Your case law searches, statute lookups and study notes will appear here.
+            Tap <strong>+ New Research</strong> above to begin.
+          </div>
+        </div>`;
+      return;
+    }
+
+    // Group by section
+    const headerHtml = `<div style="margin-bottom:16px">
+      <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em">${items.length} Research Session${items.length !== 1 ? 's' : ''}</div>
+    </div>`;
+
+    body.innerHTML = headerHtml + items.map(c => {
+      const kind = classifyResearch(c.title);
+      const isCase = kind === 'case';
+      const iconBg = isCase ? 'rgba(74,142,245,0.16)' : 'rgba(167,139,250,0.16)';
+      const iconColor = isCase ? '#4a8ef5' : '#a78bfa';
+      const kindBadge = isCase
+        ? '<span style="padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;background:rgba(74,142,245,0.16);color:#4a8ef5">⚖️ CASE LAW</span>'
+        : '<span style="padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;background:rgba(167,139,250,0.16);color:#a78bfa">📝 STUDY NOTES</span>';
+      const updated = timeAgo(c.updated_at || c.created_at);
+      const msgs = c.message_count || 0;
+      const safeTitle = (c.title || 'Untitled').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+      const summary = (c.summary || '').slice(0, 140);
+      return `<div style="background:var(--surface-2);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:10px;display:flex;gap:12px;align-items:flex-start">
+        <div style="width:42px;height:42px;border-radius:10px;background:${iconBg};color:${iconColor};display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0">${isCase ? '⚖️' : '📝'}</div>
+        <div style="flex:1;min-width:0">
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
+            <div style="font-size:14px;font-weight:700;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1">${c.title || 'Untitled Research'}</div>
+            ${kindBadge}
+          </div>
+          ${summary ? `<div style="font-size:12px;color:var(--text-muted);margin-bottom:6px;line-height:1.5">${summary}…</div>` : ''}
+          <div style="font-size:11px;color:var(--text-muted);display:flex;gap:10px;align-items:center">
+            <span>📅 ${updated}</span>
+            <span>💬 ${msgs} message${msgs !== 1 ? 's' : ''}</span>
+          </div>
+        </div>
+        <button onclick="reopenResearch('${c.id}','${safeTitle}')" style="background:var(--accent);color:#fff;border:none;padding:7px 14px;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;flex-shrink:0">Continue →</button>
+      </div>`;
+    }).join('');
+
+  } catch (e) {
+    body.innerHTML = `<div style="text-align:center;padding:40px;color:#e8908a">Failed to load research: ${e.message || ''}</div>`;
+  }
+}
+
+function reopenResearch(chatId, title) {
+  closeMyResearch();
+  openChat(chatId, title, null);
 }
 
 async function openMessages() {
@@ -6204,6 +6343,27 @@ function openSettings() {
 </script>
 
 <!-- ── MY CLIENTS OVERLAY (Lawyers only) ── -->
+<!-- ── MY RESEARCH OVERLAY (Law Students) ── -->
+<div id="researchPageOverlay" style="display:none;position:fixed;inset:0;z-index:5250;background:var(--bg);flex-direction:column;overflow:hidden">
+  <div style="display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--border);flex-shrink:0;background:var(--surface)">
+    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" style="width:20px;height:20px;opacity:0.75"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/></svg>
+    <h2 style="flex:1;margin:0;font-size:17px;font-weight:700">My Research</h2>
+    <span style="padding:3px 10px;border-radius:14px;font-size:11px;font-weight:700;background:rgba(167,139,250,0.16);color:#a78bfa;border:1px solid rgba(167,139,250,0.3)">STUDENT</span>
+    <button onclick="closeMyResearch()" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:20px;padding:4px 8px;border-radius:6px">✕</button>
+  </div>
+  <div style="padding:14px 20px;border-bottom:1px solid var(--border);flex-shrink:0;display:flex;gap:8px;flex-wrap:wrap">
+    <button id="rpTabAll"     class="rp-tab" onclick="renderResearchPage('all')">All</button>
+    <button id="rpTabCase"    class="rp-tab" onclick="renderResearchPage('case')">Case Law</button>
+    <button id="rpTabNotes"   class="rp-tab" onclick="renderResearchPage('notes')">Study Notes</button>
+    <button onclick="newResearchSession()" style="margin-left:auto;background:var(--accent);color:#fff;border:none;padding:8px 14px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer">+ New Research</button>
+  </div>
+  <div id="researchPageBody" style="flex:1;overflow-y:auto;padding:20px"></div>
+</div>
+<style>
+.rp-tab { background:var(--surface-2); color:var(--text-muted); border:1px solid var(--border); padding:6px 14px; border-radius:18px; font-size:12px; font-weight:600; cursor:pointer; font-family:var(--font-sans) }
+.rp-tab.active { background:rgba(167,139,250,0.16); color:#a78bfa; border-color:rgba(167,139,250,0.4) }
+</style>
+
 <!-- ── MESSAGES INBOX OVERLAY ── -->
 <div id="messagesOverlay" style="display:none;position:fixed;inset:0;z-index:5300;background:var(--bg);flex-direction:column;overflow:hidden">
   <div style="display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--border);flex-shrink:0;background:var(--surface)">
