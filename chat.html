@@ -1808,6 +1808,65 @@
   .lib-search { width: 130px; }
 }
 
+/* ── RESEARCH TOOLS ── */
+#researchOverlay {
+  display: none; position: fixed; inset: 0; z-index: 5100;
+  background: var(--bg); flex-direction: column; overflow: hidden;
+}
+#researchOverlay.open { display: flex; }
+.rt-header {
+  display: flex; align-items: center; gap: 12px;
+  padding: 14px 20px; border-bottom: 1px solid var(--border);
+  flex-shrink: 0; background: var(--surface);
+}
+.rt-header h2 { font-size: 17px; font-weight: 700; flex: 1; margin: 0; }
+.rt-role-badge {
+  padding: 3px 12px; border-radius: 20px; font-size: 12px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+.rt-close { background: none; border: none; color: var(--text-muted);
+  cursor: pointer; font-size: 20px; padding: 4px 8px; border-radius: 6px; }
+.rt-close:hover { color: var(--text); background: var(--surface-2); }
+.rt-body { flex: 1; overflow-y: auto; padding: 24px; }
+.rt-intro { margin-bottom: 24px; }
+.rt-intro h3 { font-size: 20px; font-weight: 700; margin: 0 0 6px; }
+.rt-intro p { font-size: 14px; color: var(--text-muted); margin: 0; line-height: 1.6; }
+.rt-grid {
+  display: grid; gap: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+}
+.rt-card {
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 12px; padding: 18px; display: flex; flex-direction: column; gap: 10px;
+  transition: border-color 0.15s, transform 0.15s;
+}
+.rt-card:hover { border-color: var(--accent); transform: translateY(-1px); }
+.rt-card-top { display: flex; align-items: flex-start; gap: 12px; }
+.rt-card-icon {
+  width: 40px; height: 40px; border-radius: 10px; display: flex;
+  align-items: center; justify-content: center; font-size: 20px; flex-shrink: 0;
+}
+.rt-card-meta { flex: 1; }
+.rt-card-name { font-size: 14px; font-weight: 700; color: var(--text); margin-bottom: 3px; }
+.rt-card-desc { font-size: 12px; color: var(--text-muted); line-height: 1.5; }
+.rt-card-input {
+  width: 100%; padding: 8px 12px; border-radius: 7px; box-sizing: border-box;
+  border: 1px solid var(--border); background: var(--bg); color: var(--text);
+  font-size: 13px; font-family: var(--font-sans); resize: none;
+}
+.rt-card-input:focus { outline: none; border-color: var(--accent); }
+.rt-card-btn {
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  width: 100%; padding: 9px 14px; border-radius: 8px; border: none;
+  font-size: 13px; font-weight: 700; cursor: pointer; font-family: var(--font-sans);
+  transition: opacity 0.15s;
+}
+.rt-card-btn:hover { opacity: 0.85; }
+@media (max-width: 600px) {
+  .rt-grid { grid-template-columns: 1fr; }
+  .rt-body { padding: 16px; }
+}
+
 </style>
   <script src="chat-api.js"></script>
   <script src="https://unpkg.com/docx@8.5.0/build/index.js"></script>
@@ -1854,7 +1913,7 @@
         <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
         My Clients
       </a>
-      <a class="sidebar-nav-item" data-roles="lawyer,student" href="javascript:void(0)" onclick="closeSidebar();openDocLibrary('research')">
+      <a class="sidebar-nav-item" data-roles="all" href="javascript:void(0)" onclick="closeSidebar();openResearchTools()">
         <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/></svg>
         Research Tools
       </a>
@@ -4624,6 +4683,290 @@ const DOCUMENT_LIBRARY = [
 // ── DOCUMENT LIBRARY FUNCTIONS ──
 let _libActiveCat = null;
 
+// ══════════════════════════════════════════════════════
+// RESEARCH TOOLS
+// ══════════════════════════════════════════════════════
+
+const RESEARCH_TOOLS = {
+
+  // ── INDIVIDUAL / OTHER ──────────────────────────────
+  individual: {
+    label: 'Individual', color: '#06b6d4', bg: 'rgba(6,182,212,0.12)',
+    intro: 'Plain-language tools to understand Nigerian law and your rights — no legal jargon.',
+    tools: [
+      { icon: '🔍', name: 'Know Your Rights',
+        desc: 'What are my rights in a specific situation? Get a clear plain-English answer.',
+        placeholder: 'Describe your situation (e.g. "police stopped me on the road")',
+        prompt: v => `I need to know my legal rights in this situation: "${v}". Please explain clearly in plain English what Nigerian law says, what I am entitled to, and what I should do. No legal jargon.` },
+      { icon: '📖', name: 'Legal Term Explainer',
+        desc: 'What does a legal term mean? Get a simple everyday explanation.',
+        placeholder: 'Enter a legal term (e.g. "affidavit", "locus standi")',
+        prompt: v => `Explain the legal term "${v}" in very simple plain English for a non-lawyer Nigerian. Give a practical example of when it comes up in everyday life.` },
+      { icon: '🏛️', name: 'Court Finder',
+        desc: 'Which court handles my type of case? Find the right court fast.',
+        placeholder: 'Describe your case (e.g. "my landlord evicted me illegally")',
+        prompt: v => `Which court in Nigeria handles this type of case: "${v}"? How do I file there, what is the procedure, and what are the costs involved? Explain in simple steps.` },
+      { icon: '⚡', name: 'Penalty Checker',
+        desc: 'What is the punishment for a crime or offence under Nigerian law?',
+        placeholder: 'Enter an offence (e.g. "stealing", "drink driving")',
+        prompt: v => `What is the legal penalty for "${v}" under Nigerian law? Which law applies, what are the exact sentences or fines, and are there any defences? Explain in plain English.` },
+      { icon: '🆘', name: 'Emergency Legal Guide',
+        desc: 'Immediate step-by-step guide for urgent legal situations.',
+        placeholder: 'What is happening right now? (e.g. "police want to arrest me")',
+        prompt: v => `URGENT: "${v}". Give me immediate step-by-step guidance on what to do right now under Nigerian law. What are my rights, what should I say or not say, and who should I call?` },
+      { icon: '👮', name: 'Police Rights Card',
+        desc: 'Your exact rights when dealing with Nigerian police — printable card.',
+        prompt: () => 'Give me a complete, clear plain-English guide to my rights when dealing with the Nigerian Police Force. Cover: arrest, detention, search, bail, right to silence, right to a lawyer. Format it so I can print and carry it.' },
+      { icon: '🏠', name: 'Tenant Rights Guide',
+        desc: 'Understand your rights as a tenant — eviction, rent, repairs.',
+        prompt: () => 'Explain my rights as a tenant in Nigeria in plain English. Cover: notice to quit periods, illegal eviction, what my landlord can and cannot do, how to report a bad landlord, and what to do if I am evicted unfairly.' },
+      { icon: '⚖️', name: 'Consumer Rights Guide',
+        desc: 'Know your rights when a product or service fails you.',
+        prompt: () => 'What are my rights as a consumer in Nigeria when a product is faulty or a service provider fails to deliver? Explain the Consumer Protection Council, how to make a complaint, and what compensation I am entitled to. Plain English only.' }
+    ]
+  },
+
+  // ── LAWYER ──────────────────────────────────────────
+  lawyer: {
+    label: 'Legal Practitioner', color: '#4a8ef5', bg: 'rgba(74,142,245,0.12)',
+    intro: 'Professional-grade research tools powered by 7,000+ Nigerian law documents with full NWLR citations.',
+    tools: [
+      { icon: '📚', name: 'Case Law Search',
+        desc: 'Find Nigerian authorities on any legal issue with full NWLR/LPELR citations.',
+        placeholder: 'Legal issue or principle (e.g. "landlord self-help eviction")',
+        prompt: v => `Conduct a case law search for Nigerian authorities on: "${v}". Provide full NWLR/LPELR citations, court levels, dates, ratio decidendi for each case, and their current standing. Include both Supreme Court and Court of Appeal authorities.` },
+      { icon: '🎯', name: 'Precedent Finder',
+        desc: 'Find precedents that support a specific legal argument or position.',
+        placeholder: 'State your legal argument or proposition',
+        prompt: v => `Find Nigerian judicial precedents supporting this proposition: "${v}". For each authority give: full citation (NWLR/LPELR), court, year, ratio decidendi, and how it supports the proposition. Also note any conflicting authorities.` },
+      { icon: '📜', name: 'Statute Interpreter',
+        desc: 'Find, reproduce and judicially interpret any Nigerian statute or section.',
+        placeholder: 'Enter Act name and section (e.g. "Evidence Act 2011 s.84")',
+        prompt: v => `Reproduce and interpret: "${v}". Provide: (1) exact statutory text, (2) judicial interpretation from Nigerian courts with full citations, (3) practical application in litigation, (4) any amendments or conflicts with other statutes.` },
+      { icon: '🔢', name: 'Citation Generator',
+        desc: 'Generate correctly formatted Nigerian legal citations.',
+        placeholder: 'Case name or statute to cite (e.g. "Savannah Bank v Ajilo")',
+        prompt: v => `Generate the correct full citation for "${v}" in Nigerian legal format (NWLR/LPELR/FWLR). Provide: full case name, year, volume, law report, part, page number. Also provide the ratio decidendi and court level.` },
+      { icon: '📄', name: 'Document Analyser',
+        desc: 'Paste a legal document — get analysis, key obligations, red flags.',
+        placeholder: 'Paste the document text or key clauses here',
+        prompt: v => `Analyse this Nigerian legal document/clause: "${v}". Identify: (1) type and legal effect, (2) key obligations of each party, (3) potentially unenforceable or problematic clauses under Nigerian law, (4) missing essential clauses, (5) red flags for your client.` },
+      { icon: '⏱️', name: 'Limitation Period Calculator',
+        desc: 'Find the exact limitation period for any type of claim in Nigeria.',
+        placeholder: 'Type of claim (e.g. "wrongful dismissal", "land trespass")',
+        prompt: v => `What is the limitation period for "${v}" in Nigeria? Provide: (1) applicable statute (Limitation Act or state law), (2) exact period, (3) when time starts running, (4) exceptions and suspension rules, (5) relevant cases on limitation for this claim type.` },
+      { icon: '🏛️', name: 'Court Rules Checker',
+        desc: 'Find procedural rules for any application or filing in any Nigerian court.',
+        placeholder: 'Procedure and court (e.g. "interlocutory injunction in Lagos High Court")',
+        prompt: v => `What are the procedural requirements for "${v}" under the applicable court rules? Provide: applicable rules with rule numbers, required documents, timelines, filing fees, service requirements, and any mandatory pre-action steps.` },
+      { icon: '🔍', name: 'Judicial Review Analyser',
+        desc: 'Assess grounds for judicial review of any administrative decision.',
+        placeholder: 'Describe the decision or action to be reviewed',
+        prompt: v => `Assess the prospects for judicial review of: "${v}". Cover: (1) available grounds (illegality, irrationality, procedural impropriety), (2) standing requirements, (3) relevant Nigerian authorities, (4) court with jurisdiction, (5) procedural steps under Order 47 FHCPR or applicable rules, (6) strategic advice.` }
+    ]
+  },
+
+  // ── LAW STUDENT ─────────────────────────────────────
+  student: {
+    label: 'Law Student', color: '#a78bfa', bg: 'rgba(167,139,250,0.12)',
+    intro: 'Academic tools for Nigerian law research, exam preparation, moot court and essay writing.',
+    tools: [
+      { icon: '📝', name: 'Case Summariser',
+        desc: 'Full IRAC case summary with facts, ratio, decision and significance.',
+        placeholder: 'Enter case name (e.g. "Savannah Bank v Ajilo 1989")',
+        prompt: v => `Give me a complete academic case summary for "${v}" in Nigerian law. Include: (1) Full citation, (2) Court and year, (3) Material facts, (4) Issue(s) for determination, (5) Ratio decidendi, (6) Decision/order, (7) Obiter dicta if any, (8) Academic significance and how the case has been applied or distinguished in subsequent cases.` },
+      { icon: '🎤', name: 'Moot Court Prep',
+        desc: 'Build arguments for both sides of a moot problem under Nigerian law.',
+        placeholder: 'Describe the moot problem or legal issue',
+        prompt: v => `Help me prepare for a moot court on: "${v}". Provide: (1) Arguments for the Appellant/Claimant with Nigerian authorities, (2) Arguments for the Respondent/Defendant with authorities, (3) Key counter-arguments each side should anticipate, (4) Strongest Nigerian cases to cite, (5) Tips for oral delivery.` },
+      { icon: '🔢', name: 'Academic Citation Guide',
+        desc: 'How to cite cases, statutes and articles correctly in academic work.',
+        placeholder: 'What to cite (e.g. "Ransome-Kuti v AG Federation 1985")',
+        prompt: v => `How do I correctly cite "${v}" in a Nigerian law academic essay or dissertation? Provide: (1) Full citation format, (2) Footnote format, (3) Bibliography format, (4) In-text reference style, (5) Common mistakes to avoid.` },
+      { icon: '📖', name: 'Essay Research Tool',
+        desc: 'Deep research on any Nigerian law topic for essays and assignments.',
+        placeholder: 'Essay topic or legal question',
+        prompt: v => `Conduct deep academic research on: "${v}" under Nigerian law. Provide: (1) Overview of the legal framework, (2) Key statutory provisions with section numbers, (3) Leading Nigerian cases with citations and ratio, (4) Academic debates or criticisms, (5) Recent developments or reforms, (6) Suggested essay structure.` },
+      { icon: '🧠', name: 'Exam Quiz',
+        desc: 'Test your knowledge with exam-style questions on any Nigerian law topic.',
+        placeholder: 'Topic to be quizzed on (e.g. "Law of Evidence", "Land Law")',
+        prompt: v => `Quiz me on "${v}" in Nigerian law. Give me 5 exam-style questions ranging from basic to advanced. After each question, pause for my answer or provide the model answer if I ask. Include the applicable statutes and cases for each answer.` },
+      { icon: '✍️', name: 'IRAC Problem Solver',
+        desc: 'Walk through a problem question step-by-step using IRAC method.',
+        placeholder: 'Paste your problem question here',
+        prompt: v => `Guide me through solving this Nigerian law problem question using IRAC: "${v}". For each issue: identify the legal issue precisely, state the rule (with statute and section numbers), apply the rule to the specific facts, and state a clear conclusion. Use full NWLR citations for all cases.` },
+      { icon: '⚖️', name: 'Ratio Decidendi Finder',
+        desc: 'Extract and explain the binding principle from any Nigerian judgment.',
+        placeholder: 'Case name to analyse',
+        prompt: v => `What is the ratio decidendi of "${v}"? Explain: (1) The exact binding principle of law, (2) How to distinguish it from obiter dicta in the judgment, (3) Which courts are bound by it (based on court hierarchy), (4) How subsequent Nigerian courts have applied or distinguished it, (5) Its current standing — is it still good law?` }
+    ]
+  },
+
+  // ── BUSINESS OWNER ──────────────────────────────────
+  business: {
+    label: 'Business Owner', color: '#22c55e', bg: 'rgba(34,197,94,0.12)',
+    intro: 'Practical legal tools for Nigerian business owners — compliance, contracts, licensing and disputes.',
+    tools: [
+      { icon: '📋', name: 'Contract Enforceability Checker',
+        desc: 'Is a contract clause or agreement enforceable under Nigerian law?',
+        placeholder: 'Describe the contract clause or agreement',
+        prompt: v => `Is this enforceable under Nigerian law: "${v}"? Analyse: (1) Whether it meets all requirements of a valid contract under Nigerian law, (2) Any clauses that may be void or unenforceable, (3) Applicable Nigerian statutes (Contracts, CAMA 2020, Consumer Protection, etc.), (4) What happens if it is breached, (5) Practical recommendation.` },
+      { icon: '🏢', name: 'Licence Requirements Finder',
+        desc: 'What licences, permits and registrations does your business need?',
+        placeholder: 'Your business type and location (e.g. "restaurant in Lagos")',
+        prompt: v => `What licences, permits and regulatory approvals does "${v}" need to operate legally in Nigeria? For each requirement: which agency issues it, what documents are needed, what is the cost and timeline, and what is the penalty for operating without it?` },
+      { icon: '💰', name: 'Debt Recovery Guide',
+        desc: 'How to recover a business debt — legal steps and options.',
+        placeholder: 'Describe the debt (amount, type of debtor, how long overdue)',
+        prompt: v => `How do I recover this business debt under Nigerian law: "${v}"? Provide: (1) Pre-litigation steps (demand letters, negotiation), (2) Which court to sue in and why, (3) Procedure for filing the claim, (4) Timeline and costs, (5) Enforcement options if judgment is obtained (garnishee, warrant of execution), (6) Whether to use debt recovery agent or go to court.` },
+      { icon: '🧾', name: 'Tax Obligations Checker',
+        desc: 'What taxes does your business owe and when are they due?',
+        placeholder: 'Your business type and structure (e.g. "import/export company, Ltd")',
+        prompt: v => `What are the complete tax obligations for "${v}" in Nigeria? Cover: (1) Company Income Tax (CITA), (2) VAT obligations, (3) WHT responsibilities, (4) PAYE for employees, (5) State tax obligations, (6) Filing deadlines and penalties for non-compliance, (7) Tax clearance certificate requirements.` },
+      { icon: '👔', name: 'Employment Law Compliance',
+        desc: 'Are your employment practices compliant with Nigerian Labour Act?',
+        placeholder: 'Describe your employment practice or situation',
+        prompt: v => `Is this employment practice compliant with Nigerian law: "${v}"? Check against: (1) Labour Act (Cap L1 LFN 2004), (2) Employee Compensation Act 2010, (3) Pension Reform Act 2014, (4) NICN jurisdiction, (5) Minimum wage obligations, (6) Termination procedures. Advise on what to change to be fully compliant.` },
+      { icon: '📊', name: 'Regulatory Compliance Check',
+        desc: 'What regulations apply to your industry in Nigeria?',
+        placeholder: 'Your industry (e.g. "fintech", "food manufacturing", "healthcare")',
+        prompt: v => `What are the key regulatory requirements for the "${v}" industry in Nigeria? Cover: (1) Primary regulatory body and its powers, (2) Licence/registration requirements, (3) Ongoing compliance obligations, (4) Recent regulatory changes, (5) Penalties for non-compliance, (6) How to engage with the regulator proactively.` },
+      { icon: '⚠️', name: 'Business Dispute Resolver',
+        desc: 'Legal options when a business dispute arises — court or arbitration?',
+        placeholder: 'Describe the dispute and the parties involved',
+        prompt: v => `What are my legal options for resolving this business dispute: "${v}"? Compare: (1) Negotiation and settlement, (2) Mediation options in Nigeria, (3) Arbitration (domestic and international — Lagos Court of Arbitration), (4) Court litigation (which court, costs, timeline), (5) Which approach is recommended and why for this specific dispute.` }
+    ]
+  },
+
+  // ── JOURNALIST ──────────────────────────────────────
+  journalist: {
+    label: 'Journalist', color: '#f97316', bg: 'rgba(249,115,22,0.12)',
+    intro: 'Press law tools for Nigerian journalists — FOI, defamation, source protection and press freedom.',
+    tools: [
+      { icon: '📬', name: 'FOI Request Builder',
+        desc: 'Draft a legally sound FOI request to any government body.',
+        placeholder: 'What information do you need and from which government body?',
+        prompt: v => `Draft a formal Freedom of Information request under the Nigerian FOI Act 2011 for: "${v}". Include: (1) Proper statutory basis (FOI Act ss.1-3), (2) Specific information requested, (3) Timeline for response (7 days under FOI Act), (4) What to do if denied, (5) The appeal process under s.21. Also advise on which body is obligated under the Act.` },
+      { icon: '⚖️', name: 'Defamation Risk Checker',
+        desc: 'Could publishing this story expose you to a defamation claim?',
+        placeholder: 'Describe what you plan to publish and about whom',
+        prompt: v => `Assess the defamation risk of publishing: "${v}" under Nigerian law. Cover: (1) Whether it is defamatory at first instance (lowering reputation in right-thinking minds), (2) Available defences — justification, fair comment, privilege, (3) Whether the subject is a public figure (reduced protection), (4) Risk level assessment, (5) How to publish safely while maintaining the story's impact.` },
+      { icon: '🗽', name: 'Press Freedom Rights',
+        desc: 'Your legal rights when covering sensitive stories or facing pressure.',
+        placeholder: 'Describe the situation (e.g. "covering a protest", "police blocked me")',
+        prompt: v => `What are my rights as a Nigerian journalist in this situation: "${v}"? Apply: (1) Section 22 CFRN 1999 (press freedom), (2) Section 39 (freedom of expression), (3) Nigerian Press Council Act, (4) FOI Act 2011, (5) What police or government officials CANNOT lawfully do, (6) What to do if your rights are violated — immediate steps and who to call.` },
+      { icon: '🔒', name: 'Privacy Law Checker',
+        desc: 'Does publishing this content violate privacy rights under Nigerian law?',
+        placeholder: 'Describe the content and the person it concerns',
+        prompt: v => `Does publishing "${v}" violate privacy rights under Nigerian law? Analyse: (1) Whether there is a reasonable expectation of privacy, (2) Public interest justification, (3) Section 37 CFRN 1999 (right to privacy), (4) Cybercrime Act 2015 s.24 (offensive publications), (5) Data protection obligations (NDPR/NITDA), (6) Recommendation on how to publish responsibly.` },
+      { icon: '🛡️', name: 'Source Protection Adviser',
+        desc: 'Your legal position when ordered to reveal a confidential source.',
+        prompt: () => `What are a Nigerian journalist's legal rights and obligations when ordered to reveal a confidential source? Cover: (1) Is there a statutory journalist privilege in Nigeria? (2) What happens if a court orders disclosure? (3) Evidence Act provisions on privileged communications, (4) Constitutional protection under s.39 CFRN, (5) International standards applicable in Nigeria, (6) Practical steps to protect sources before publication.` },
+      { icon: '⚠️', name: 'Contempt of Court Risk',
+        desc: 'Could your reporting constitute contempt of court?',
+        placeholder: 'Describe what you plan to publish and the court proceedings involved',
+        prompt: v => `Does publishing "${v}" risk contempt of court in Nigeria? Explain: (1) Criminal vs civil contempt, (2) Whether proceedings are active (sub judice rule), (3) What constitutes prejudicing a fair trial, (4) Reporting restrictions that apply, (5) Penalties for contempt, (6) How to report on legal proceedings safely and responsibly.` },
+      { icon: '📡', name: 'Cybercrime Act Guide for Press',
+        desc: 'How the Cybercrime Act 2015 affects online journalism.',
+        prompt: () => `Explain how the Nigerian Cybercrime (Prohibition, Prevention etc.) Act 2015 affects digital and online journalism. Cover: (1) Which sections journalists should know (especially ss.24, 38), (2) What content is criminalised, (3) How this has been used against journalists in Nigeria, (4) Your legal defences as a journalist, (5) How to protect yourself while reporting online.` }
+    ]
+  }
+};
+
+// Map 'other' to individual
+RESEARCH_TOOLS.other = RESEARCH_TOOLS.individual;
+
+function openResearchTools() {
+  const overlay = document.getElementById('researchOverlay');
+  if (!overlay) return;
+  overlay.classList.add('open');
+  document.body.style.overflow = 'hidden';
+  _renderResearchTools();
+}
+
+function closeResearchTools() {
+  const overlay = document.getElementById('researchOverlay');
+  if (overlay) overlay.classList.remove('open');
+  document.body.style.overflow = '';
+}
+
+function _renderResearchTools() {
+  const role = userProfile?.user_type || 'other';
+  const config = RESEARCH_TOOLS[role] || RESEARCH_TOOLS.individual;
+
+  // Role badge
+  const badge = document.getElementById('rtRoleBadge');
+  if (badge) {
+    badge.textContent = config.label;
+    badge.style.background = config.bg;
+    badge.style.color = config.color;
+    badge.style.border = `1px solid ${config.color}44`;
+  }
+
+  const body = document.getElementById('rtBody');
+  if (!body) return;
+
+  let html = `<div class="rt-intro">
+    <h3>Tools for ${config.label}s</h3>
+    <p>${config.intro}</p>
+  </div>
+  <div class="rt-grid">`;
+
+  config.tools.forEach((tool, idx) => {
+    const hasInput = !!tool.placeholder;
+    const inputId = `rtInput_${idx}`;
+    html += `<div class="rt-card">
+      <div class="rt-card-top">
+        <div class="rt-card-icon" style="background:${config.bg}">${tool.icon}</div>
+        <div class="rt-card-meta">
+          <div class="rt-card-name">${tool.name}</div>
+          <div class="rt-card-desc">${tool.desc}</div>
+        </div>
+      </div>
+      ${hasInput ? `<textarea class="rt-card-input" id="${inputId}" placeholder="${tool.placeholder}" rows="2"></textarea>` : ''}
+      <button class="rt-card-btn" style="background:${config.color};color:#fff"
+        onclick="launchResearchTool(${idx}, ${hasInput ? `'${inputId}'` : 'null'})">
+        ✦ Launch Tool
+      </button>
+    </div>`;
+  });
+
+  html += '</div>';
+  body.innerHTML = html;
+}
+
+function launchResearchTool(toolIdx, inputId) {
+  const role = userProfile?.user_type || 'other';
+  const config = RESEARCH_TOOLS[role] || RESEARCH_TOOLS.individual;
+  const tool = config.tools[toolIdx];
+  if (!tool) return;
+
+  let inputVal = '';
+  if (inputId) {
+    const el = document.getElementById(inputId);
+    inputVal = el ? el.value.trim() : '';
+    if (!inputVal) {
+      if (el) { el.style.borderColor = '#ef4444'; el.focus(); }
+      setTimeout(() => { if (el) el.style.borderColor = ''; }, 1500);
+      return;
+    }
+  }
+
+  const prompt = typeof tool.prompt === 'function' ? tool.prompt(inputVal) : tool.prompt;
+  closeResearchTools();
+  closeSidebar();
+
+  setTimeout(() => {
+    const ws = document.getElementById('welcomeState');
+    if (ws) ws.remove();
+    fillPrompt(prompt);
+    setTimeout(() => {
+      const inp = document.getElementById('chatInput');
+      if (inp && inp.value.trim()) send();
+    }, 80);
+  }, 180);
+}
+
 function openDocLibrary(categoryId) {
   const overlay = document.getElementById('docLibraryOverlay');
   if (!overlay) return;
@@ -5283,6 +5626,16 @@ function openSettings() {
   onViewportChange();
 })();
 </script>
+
+<!-- ── RESEARCH TOOLS OVERLAY ── -->
+<div id="researchOverlay">
+  <div class="rt-header">
+    <h2>Research Tools</h2>
+    <span class="rt-role-badge" id="rtRoleBadge"></span>
+    <button class="rt-close" onclick="closeResearchTools()">✕</button>
+  </div>
+  <div class="rt-body" id="rtBody"></div>
+</div>
 
 <!-- ── DOCUMENT LIBRARY OVERLAY ── -->
 <div id="docLibraryOverlay">
