@@ -2789,9 +2789,13 @@ async function send() {
       // Access-Control-Expose-Headers. Content-Type is always safe to read.
       const isStream = res.headers.get('X-Stream') === '1'
         || (res.headers.get('Content-Type') || '').includes('event-stream');
-      const intentType = res.headers.get('X-Intent')
-        || (/\b(draft|prepare|write|generate)\b.{0,40}\b(affidavit|agreement|contract|deed|petition|motion|writ|notice|memo|memorandum|tenancy|employment|divorce|letter of demand|power of attorney)\b/i.test(text) ? 'documents' : 'conversational');
-      const isDocument = intentType === 'documents';
+      const xIntent = res.headers.get('X-Intent');
+      // Robust client-side intent detection (used when X-Intent header isn't present)
+      const _draftVerbRx = /\b(draft|prepare|write|generate|create|produce|make|compose)\b/i;
+      const _docNounRx = /\b(affidavit|agreement|contract|deed|petition|motion|writ|notice|memo(randum)?|letter|tenancy|lease|employment\s+contract|offer\s+letter|divorce|petition\s+for\s+dissolution|power\s+of\s+attorney|MOU|NDA|non.?disclosure|consultancy|partnership|shareholders?|service\s+agreement|will|codicil|undertaking|guarantee|indemnity|loan\s+agreement|promissory\s+note|policy|terms\s+of\s+(use|service)|privacy\s+policy|cease\s+and\s+desist|demand\s+letter|FOI\s+request|quit\s+notice|application)\b/i;
+      const intentType = xIntent
+        || ((_draftVerbRx.test(text) && _docNounRx.test(text)) ? 'documents' : 'conversational');
+      let isDocument = intentType === 'documents';
 
       const _ACTIONS = '<div class="msg-actions">'
         + '<button class="act-btn" title="Copy" onclick="copyMsg(this)"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2" stroke-width="1.8"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" stroke-width="1.8"/></svg></button>'
@@ -2812,12 +2816,14 @@ async function send() {
         let parsedText = '';
         let sseBuffer = '';
 
+        // Initial drafting indicator for documents
         if (isDocument) {
-          _sDiv.innerHTML = '<div style="color:var(--accent);font-style:italic;padding:8px 0">📄 Drafting your legal document...</div>';
+          _sDiv.innerHTML = '<div style="display:flex;align-items:center;gap:10px;padding:14px;background:var(--surface-2);border:1px solid var(--border);border-radius:10px"><div class="dots" style="display:flex;gap:3px"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div><div style="font-size:13px;color:var(--accent);font-weight:600">Drafting your document…</div></div>';
         }
 
         // Track if the AI is asking for more details rather than generating
         let _needDetails = false;
+        let _lastDocPreviewUpdate = 0;
 
         while (true) {
           const { done, value } = await reader.read();
@@ -2836,6 +2842,7 @@ async function send() {
                 // Detect details-request response (set on first chunk)
                 if (!_needDetails && parsedText.trimStart().startsWith('NEED_DETAILS:')) {
                   _needDetails = true;
+                  isDocument = false; // details requests are conversational
                 }
                 if (!isDocument || _needDetails) {
                   // Stream as regular chat text (strip the prefix)
@@ -2844,6 +2851,14 @@ async function send() {
                     : parsedText;
                   _sDiv.innerHTML = mdToHtml(display);
                   scrollDown();
+                } else {
+                  // Document mode — throttled preview showing word count
+                  const now = Date.now();
+                  if (now - _lastDocPreviewUpdate > 250) {
+                    _lastDocPreviewUpdate = now;
+                    const words = parsedText.trim().split(/\s+/).length;
+                    _sDiv.innerHTML = '<div style="display:flex;align-items:center;gap:12px;padding:14px;background:var(--surface-2);border:1px solid var(--border);border-radius:10px"><div class="dots" style="display:flex;gap:3px"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div><div><div style="font-size:13px;color:var(--accent);font-weight:600">Drafting your document…</div><div style="font-size:11px;color:var(--text-muted);margin-top:2px">' + words.toLocaleString() + ' words generated</div></div></div>';
+                  }
                 }
               }
             } catch {}
@@ -2851,6 +2866,19 @@ async function send() {
         }
 
         reply = parsedText;
+
+        // ── CONTENT-PATTERN FALLBACK ──
+        // If the AI returned something that LOOKS like a formal legal document
+        // (long, has a title/heading, contains classic doc phrases) treat it as
+        // a document even if intent detection missed it.
+        if (!isDocument && !_needDetails && parsedText) {
+          const looksLikeDoc = parsedText.length > 600 && (
+            /^#{1,2}\s+[A-Z][A-Z\s]{5,}/m.test(parsedText) ||
+            /\b(AFFIDAVIT|AGREEMENT|DEED|PETITION|MOTION|WRIT|NOTICE TO QUIT|MEMORANDUM|TENANCY|LEASE|POWER OF ATTORNEY|STATUTORY DECLARATION|WHEREAS|NOW THIS\s+DEED|BETWEEN|IN THE\s+(HIGH|FEDERAL|SUPREME|MAGISTRATE)\s+COURT|TAKE NOTICE)\b/.test(parsedText) &&
+            /\bsigned|signature|sworn|deponent|signature\s+of|date[d]?\s*[:_]/i.test(parsedText)
+          );
+          if (looksLikeDoc) isDocument = true;
+        }
 
         // ── NEED_DETAILS branch — treat as conversational, no viewer ──
         if (_needDetails) {
@@ -2875,15 +2903,31 @@ async function send() {
           // Open A4 viewer immediately
           openDocViewer(parsedText, parsedText, docTitleClean);
 
-          // Show compact card with "Saving…" status
+          // Compact document card with title, word count, viewer + Word buttons
           const _cardId = 'dc' + Date.now();
-          _sDiv.innerHTML = '<div id="' + _cardId + '" style="display:flex;align-items:center;gap:12px;padding:12px 14px;background:var(--surface-2);border:1px solid var(--border);border-radius:10px">'
-            + '<span style="font-size:22px;flex-shrink:0">📄</span>'
-            + '<div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + docTitleClean + '</div>'
-            + '<div class="doc-save-status" style="font-size:12px;color:var(--text-muted);margin-top:2px">Saving…</div></div>'
-            + '<button onclick="document.getElementById(\'docOverlay\').classList.add(\'open\');document.body.style.overflow=\'hidden\'" style="background:var(--accent);color:#fff;border:none;padding:7px 14px;border-radius:7px;cursor:pointer;font-size:12px;font-weight:600;flex-shrink:0">↗ Reopen</button>'
+          const _wc = parsedText.trim().split(/\s+/).length;
+          const _safeTitle = docTitleClean.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+          _sDiv.innerHTML =
+            '<div id="' + _cardId + '" style="background:var(--surface-2);border:1px solid var(--border);border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:10px">'
+              + '<div style="display:flex;align-items:center;gap:12px">'
+                + '<div style="width:44px;height:44px;border-radius:10px;background:rgba(74,142,245,0.15);display:flex;align-items:center;justify-content:center;font-size:22px;flex-shrink:0">📄</div>'
+                + '<div style="flex:1;min-width:0">'
+                  + '<div style="font-size:14px;font-weight:700;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + docTitleClean + '</div>'
+                  + '<div class="doc-save-status" style="font-size:11px;color:var(--text-muted);margin-top:2px">Saving… · ' + _wc.toLocaleString() + ' words</div>'
+                + '</div>'
+              + '</div>'
+              + '<div style="display:flex;gap:8px">'
+                + '<button onclick="openDocViewer(this.parentElement.parentElement.dataset.raw, this.parentElement.parentElement.dataset.raw, this.parentElement.parentElement.dataset.title)" style="flex:1;background:var(--accent);color:#fff;border:none;padding:9px 14px;border-radius:8px;cursor:pointer;font-size:12px;font-weight:600">↗ Open in Viewer</button>'
+                + '<button onclick="(function(t,b){_docRawText=t;_docTitle=b;downloadDocx()}).call(null, this.parentElement.parentElement.dataset.raw, this.parentElement.parentElement.dataset.title.replace(/[^a-zA-Z0-9_\\- ]/g,\'_\'))" style="flex:1;background:rgba(255,255,255,0.06);color:var(--text);border:1px solid var(--border);padding:9px 14px;border-radius:8px;cursor:pointer;font-size:12px;font-weight:600">⬇ Word</button>'
+              + '</div>'
             + '</div>'
             + _ACTIONS;
+          // Store full content on the card so the buttons can reach it
+          const _cardEl = document.getElementById(_cardId);
+          if (_cardEl) {
+            _cardEl.dataset.raw = parsedText;
+            _cardEl.dataset.title = _safeTitle;
+          }
 
           scrollDown();
           // Full content in history so AI has context for follow-up questions
@@ -4279,14 +4323,29 @@ async function startDocumentFlow(docType) {
         // Open A4 viewer immediately
         openDocViewer(reply, reply, docTitle);
 
-        // Compact card with unique ID for status update
+        // Compact document card: title, word count, Open in Viewer + Word buttons
         const _cardId = 'dc' + Date.now();
-        _dDiv.innerHTML = '<div id="' + _cardId + '" style="display:flex;align-items:center;gap:12px;padding:12px 14px;background:var(--surface-2);border:1px solid var(--border);border-radius:10px">'
-          + '<span style="font-size:22px;flex-shrink:0">📄</span>'
-          + '<div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + docTitle + '</div>'
-          + '<div class="doc-save-status" style="font-size:12px;color:var(--text-muted);margin-top:2px">Saving…</div></div>'
-          + '<button onclick="document.getElementById(\'docOverlay\').classList.add(\'open\');document.body.style.overflow=\'hidden\'" style="background:var(--accent);color:#fff;border:none;padding:7px 14px;border-radius:7px;cursor:pointer;font-size:12px;font-weight:600;flex-shrink:0">↗ Reopen</button>'
+        const _wc = reply.trim().split(/\s+/).length;
+        const _safeTitle = docTitle.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+        _dDiv.innerHTML =
+          '<div id="' + _cardId + '" style="background:var(--surface-2);border:1px solid var(--border);border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:10px">'
+            + '<div style="display:flex;align-items:center;gap:12px">'
+              + '<div style="width:44px;height:44px;border-radius:10px;background:rgba(74,142,245,0.15);display:flex;align-items:center;justify-content:center;font-size:22px;flex-shrink:0">📄</div>'
+              + '<div style="flex:1;min-width:0">'
+                + '<div style="font-size:14px;font-weight:700;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + docTitle + '</div>'
+                + '<div class="doc-save-status" style="font-size:11px;color:var(--text-muted);margin-top:2px">Saving… · ' + _wc.toLocaleString() + ' words</div>'
+              + '</div>'
+            + '</div>'
+            + '<div style="display:flex;gap:8px">'
+              + '<button onclick="openDocViewer(this.parentElement.parentElement.dataset.raw, this.parentElement.parentElement.dataset.raw, this.parentElement.parentElement.dataset.title)" style="flex:1;background:var(--accent);color:#fff;border:none;padding:9px 14px;border-radius:8px;cursor:pointer;font-size:12px;font-weight:600">↗ Open in Viewer</button>'
+              + '<button onclick="(function(t,b){_docRawText=t;_docTitle=b;downloadDocx()}).call(null, this.parentElement.parentElement.dataset.raw, this.parentElement.parentElement.dataset.title.replace(/[^a-zA-Z0-9_\\- ]/g,\'_\'))" style="flex:1;background:rgba(255,255,255,0.06);color:var(--text);border:1px solid var(--border);padding:9px 14px;border-radius:8px;cursor:pointer;font-size:12px;font-weight:600">⬇ Word</button>'
+            + '</div>'
           + '</div>';
+        const _cardEl = document.getElementById(_cardId);
+        if (_cardEl) {
+          _cardEl.dataset.raw = reply;
+          _cardEl.dataset.title = _safeTitle;
+        }
 
         scrollDown();
         history.push({ role: 'assistant', content: reply });
@@ -5996,13 +6055,18 @@ async function openChat(chatId, title, el) {
     row.className = 'msg-row ai-row';
     row.innerHTML = '<div class="msg-avatar" style="display:none"></div>'
       + '<div class="msg-body"><div class="ai-content">'
-      + '<div style="display:flex;align-items:center;gap:12px;padding:12px 14px;background:var(--surface-2);border:1px solid var(--border);border-radius:10px">'
-      + '<span style="font-size:22px;flex-shrink:0">📄</span>'
-      + '<div style="flex:1;min-width:0">'
-      + '<div style="font-size:13px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + (docTitle || 'Legal Document') + '</div>'
-      + '<div style="font-size:12px;color:var(--text-muted);margin-top:2px">✓ Saved to Documents</div>'
-      + '</div>'
-      + '<button onclick="openSavedDoc(\'' + docId + '\')" style="background:var(--accent);color:#fff;border:none;padding:7px 14px;border-radius:7px;cursor:pointer;font-size:12px;font-weight:600;flex-shrink:0">↗ Open</button>'
+      + '<div style="background:var(--surface-2);border:1px solid var(--border);border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:10px">'
+      +   '<div style="display:flex;align-items:center;gap:12px">'
+      +     '<div style="width:44px;height:44px;border-radius:10px;background:rgba(74,142,245,0.15);display:flex;align-items:center;justify-content:center;font-size:22px;flex-shrink:0">📄</div>'
+      +     '<div style="flex:1;min-width:0">'
+      +       '<div style="font-size:14px;font-weight:700;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + (docTitle || 'Legal Document') + '</div>'
+      +       '<div style="font-size:11px;color:var(--text-muted);margin-top:2px">✓ Saved to Documents</div>'
+      +     '</div>'
+      +   '</div>'
+      +   '<div style="display:flex;gap:8px">'
+      +     '<button onclick="openSavedDoc(\'' + docId + '\')" style="flex:1;background:var(--accent);color:#fff;border:none;padding:9px 14px;border-radius:8px;cursor:pointer;font-size:12px;font-weight:600">↗ Open in Viewer</button>'
+      +     '<button onclick="downloadSavedDocx(\'' + docId + '\', \'' + (docTitle||'Document').replace(/'/g,"\\'") + '\', this)" style="flex:1;background:rgba(255,255,255,0.06);color:var(--text);border:1px solid var(--border);padding:9px 14px;border-radius:8px;cursor:pointer;font-size:12px;font-weight:600">⬇ Word</button>'
+      +   '</div>'
       + '</div>'
       + '</div></div>';
     document.getElementById('messagesInner').appendChild(row);
