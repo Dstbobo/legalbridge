@@ -1895,7 +1895,7 @@
       </a>
       <a class="sidebar-nav-item" data-roles="all" href="#" onclick="closeSidebar()">
         <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-        My Cases
+        <span id="sidebarCasesLabel">My Cases</span>
       </a>
       <a class="sidebar-nav-item" data-roles="all" href="javascript:void(0)" onclick="closeSidebar();openDocsPanel()">
         <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8" stroke-width="1.8"/><line x1="16" y1="13" x2="8" y2="13" stroke-width="1.8"/><line x1="16" y1="17" x2="8" y2="17" stroke-width="1.8"/></svg>
@@ -4440,6 +4440,9 @@ function applyRoleNav() {
     const roles = el.getAttribute('data-roles').split(',');
     el.style.display = (roles.includes(type) || roles.includes('all')) ? '' : 'none';
   });
+  // Students see "My Research" instead of "My Cases" — they don't have legal cases
+  const casesLabel = document.getElementById('sidebarCasesLabel');
+  if (casesLabel) casesLabel.textContent = (type === 'student') ? 'My Research' : 'My Cases';
 }
 
 // ── BOTTOM TAB BAR ──
