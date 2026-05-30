@@ -2076,50 +2076,25 @@ let currentUser = null;
 let userProfile = null;
 
 // ── CONTEXTUAL LOADING MESSAGES BY USER TYPE ──
-function getLoadingMessage(userMsg) {
-  const msg = (userMsg || '').toLowerCase();
+// ── DYNAMIC AI-GENERATED STATUS MESSAGE ──
+// Calls a lightweight edge function that uses Gemini Flash to generate
+// a natural, specific status message while the main response streams in.
+function fireStatusUpdate(userMsg) {
   const type = userProfile?.user_type || 'other';
-
-  // ── CONTEXTUAL STATUS based on message content + role ──
-  // Draft/document detection
-  if (/draft|write|prepare|generate/.test(msg)) {
-    const docName = msg.match(/(?:draft|write|prepare|generate)\s+(?:a\s+|an\s+)?([\w\s]+)/i);
-    return '✍️ Drafting your ' + (docName ? docName[1].trim().slice(0, 30) : 'document') + '...';
-  }
-  if (/affidavit|agreement|contract|deed|petition|motion|writ|notice|memo/.test(msg))
-    return '✍️ Preparing your legal document...';
-  if (/find.*lawyer|search.*lawyer|recommend.*lawyer/.test(msg))
-    return '🔍 Finding verified lawyers for you...';
-  if (/summari[sz]e|analy[sz]e|review/.test(msg))
-    return '📄 Analysing your document...';
-  if (/register|CAC|TIN|NAFDAC|SCUML/.test(msg))
-    return '🏛️ Checking registration requirements...';
-  if (/^(hello|hi|hey|how are you|good morning|good afternoon|good evening)/i.test(msg.trim()))
-    return '💬 LegalBridge is here...';
-
-  // Role-specific content detection
-  if (type === 'other' || type === 'individual') {
-    if (/arrest|rights|police|sars|dss|detention/.test(msg)) return '⚖️ Checking your rights under Nigerian law...';
-    if (/land|property|tenancy|landlord|tenant|rent/.test(msg)) return '🏠 Searching property and tenancy law...';
-    if (/debt|loan|money|owe|borrow/.test(msg)) return '💰 Checking debt recovery options...';
-  }
-  if (type === 'lawyer') {
-    if (/precedent|case law|authority|nwlr|lpelr/.test(msg)) return '📚 Searching legal precedents and statutes...';
-    if (/client|case|court|hearing|trial|filing/.test(msg)) return '⚖️ Reviewing case law for you...';
-    return '📚 Searching Nigerian law database...';
-  }
-  if (type === 'student') return '🎓 Searching Nigerian case law and statutes...';
-  if (type === 'business') {
-    if (/contract|agreement|employee|employer/.test(msg)) return '💼 Analysing under Nigerian business law...';
-    if (/tax|licence|CAC|compliance/.test(msg)) return '📋 Checking regulatory requirements...';
-    return '💼 Searching Nigerian business law...';
-  }
-  if (type === 'journalist') {
-    if (/FOI|press|defamation|publication|source/.test(msg)) return '📰 Checking press freedom and media laws...';
-    return '📰 Searching Nigerian media law...';
-  }
-
-  return '📚 Searching Nigerian law database...';
+  fetch(`${SUPABASE_URL}/functions/v1/chat-status`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_ANON_KEY },
+    body: JSON.stringify({ message: userMsg, userType: type })
+  })
+  .then(r => r.json())
+  .then(d => {
+    const el = document.getElementById('loadingMsg');
+    if (el && d.status) {
+      el.style.opacity = '0';
+      setTimeout(() => { el.textContent = d.status; el.style.opacity = '1'; }, 150);
+    }
+  })
+  .catch(() => {}); // silent — main response will arrive regardless
 }
 
 // ── DYNAMIC SUGGESTION CARDS ──
@@ -2428,10 +2403,12 @@ function showTyping(userMsg) {
     <div class="msg-avatar" style="background:var(--surface-2);border:1px solid var(--border-hover);font-family:var(--font-serif);font-style:italic;font-size:13px;color:var(--accent);">LB</div>
     <div style="display:flex;flex-direction:column;gap:6px">
       <div class="dots"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>
-      <div style="font-size:12px;color:var(--text-muted);font-style:italic" id="loadingMsg">${getLoadingMessage(userMsg)}</div>
+      <div style="font-size:12px;color:var(--text-muted);font-style:italic;transition:opacity 0.15s" id="loadingMsg">Thinking...</div>
     </div>`;
   document.getElementById('messagesInner').appendChild(el);
   scrollDown();
+  // Fire AI status generation in background — updates #loadingMsg when ready
+  if (userMsg) fireStatusUpdate(userMsg);
 }
 
 function removeTyping() {
