@@ -9,6 +9,19 @@ const CORS = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+// ── NIGERIAN DATE HELPER (server-side) ──
+function nigerianToday(): string {
+  const d = new Date();
+  const day = d.getDate();
+  const suffix = (day >= 11 && day <= 13) ? 'th'
+    : day % 10 === 1 ? 'st'
+    : day % 10 === 2 ? 'nd'
+    : day % 10 === 3 ? 'rd'
+    : 'th';
+  const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  return `${day}${suffix} ${months[d.getMonth()]}, ${d.getFullYear()}`;
+}
+
 // ── DOCUMENT TYPES & TEMPLATES ──
 const DOCUMENT_PROMPTS: Record<string, string> = {
   affidavit: `Draft a complete Nigerian affidavit. Include:
@@ -16,7 +29,7 @@ const DOCUMENT_PROMPTS: Record<string, string> = {
 - Deponent details (name, address, occupation)
 - Sworn statement opening: "I, [NAME], make oath and say as follows:"
 - Numbered paragraphs for each fact
-- Jurat: "SWORN at [PLACE] this [DATE]" with signature lines for deponent and Commissioner for Oaths
+- Jurat: "SWORN at [PLACE] this <ACTUAL TODAY'S DATE>" with signature lines for deponent and Commissioner for Oaths
 - Apply Evidence Act 2011 (ss.107-119) requirements`,
 
   agreement: `Draft a complete Nigerian agreement/contract. Include:
@@ -33,7 +46,7 @@ const DOCUMENT_PROMPTS: Record<string, string> = {
 - Apply Contract Law principles and CAMA 2020 where relevant`,
 
   deed: `Draft a complete Nigerian deed. Include:
-- THIS DEED is made this [DATE]
+- THIS DEED is made this <ACTUAL TODAY'S DATE>
 - Full parties with capacity statement
 - Recitals
 - Operative words ("NOW THIS DEED WITNESSES")
@@ -234,10 +247,11 @@ TASK: Produce a complete, professional, court-ready Nigerian legal document.
 DRAFTING STANDARDS:
 - Use proper Nigerian legal drafting conventions
 - No placeholders for content you have been given — use the actual names, amounts, addresses
-- Use [DATE], [COURT REFERENCE] only for genuinely unknown/system-generated specifics
+- **NEVER WRITE [DATE], [TODAY'S DATE], [INSERT DATE], or any date placeholder.** Today's date is ${nigerianToday()}. Always write the actual date in this exact Nigerian format: "${nigerianToday()}".
+- For court reference numbers that don't exist yet, write "Suit No: [TO BE ASSIGNED]" only.
 - Number all clauses properly
-- Include execution/signature blocks
-- Cite governing Nigerian statutes in relevant clauses
+- Include execution/signature blocks (signature lines, witnesses, jurat where applicable)
+- Cite governing Nigerian statutes in relevant clauses by exact section number
 
 DOCUMENT TYPE DETECTED: ${docType.toUpperCase()}
 ${docTemplate}`;

@@ -2894,12 +2894,12 @@ async function send() {
           return;
         }
 
-        // Derive doc type label from user message for title fallback
-        const _rawDocType = text.replace(/^(draft|prepare|write|generate)\s+(a\s+|an\s+)?/i, '').trim();
-        const _docTypeFallback = _rawDocType.charAt(0).toUpperCase() + _rawDocType.slice(1, 50);
+        // Auto-fill date placeholders before display/save
+        parsedText = fillDatePlaceholders(parsedText);
+        reply = parsedText;
 
-        // Smart title: parse real party names from the generated document
-        const docTitleClean = extractDocTitle(parsedText, _docTypeFallback);
+        // Smart title: pass the original user message so the type can be inferred
+        const docTitleClean = extractDocTitle(parsedText, text);
 
         if (isDocument && parsedText) {
           // Open A4 viewer immediately
@@ -3162,49 +3162,107 @@ function formatDocDate(dateStr) {
 // ── SMART TITLE EXTRACTION ──
 // Parses the generated document to find real party names.
 // Falls back to the docType string if no names found.
-function extractDocTitle(content, fallbackType) {
-  const type = (fallbackType || 'Legal Document').trim();
-  if (!content) return type;
-  // Scan first 3000 chars for patterns
+// ── NIGERIAN DATE HELPERS ──
+function nigerianDate(d) {
+  const date = d || new Date();
+  const day = date.getDate();
+  const suffix = (n => {
+    if (n >= 11 && n <= 13) return 'th';
+    switch (n % 10) { case 1: return 'st'; case 2: return 'nd'; case 3: return 'rd'; default: return 'th'; }
+  })(day);
+  const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  return `${day}${suffix} ${months[date.getMonth()]}, ${date.getFullYear()}`;
+}
+
+// Replace common [DATE] placeholders with today's date in Nigerian format
+function fillDatePlaceholders(text) {
+  if (!text) return text;
+  const today = nigerianDate();
+  const day   = String(new Date().getDate());
+  const month = ['January','February','March','April','May','June','July','August','September','October','November','December'][new Date().getMonth()];
+  const year  = String(new Date().getFullYear());
+  return text
+    .replace(/\[\s*(?:TODAY'?S?\s+DATE|TODAY|CURRENT\s+DATE|DATE\s+OF\s+EXECUTION|DATE\s+OF\s+SIGNING|DATED|DATE)\s*\]/gi, today)
+    .replace(/\[\s*INSERT\s+DATE\s*\]/gi, today)
+    .replace(/\bDated[:\s]+\[\s*\]/gi, `Dated: ${today}`)
+    .replace(/\b(this|made\s+this)\s+_+\s+day\s+of\s+_+,?\s*(20)?_+/gi, `$1 ${day}${(() => { if (+day>=11 && +day<=13) return 'th'; const r=+day%10; return r===1?'st':r===2?'nd':r===3?'rd':'th'; })()} day of ${month}, ${year}`)
+    .replace(/\[\s*(?:DAY)\s*\]/gi, day)
+    .replace(/\[\s*(?:MONTH)\s*\]/gi, month)
+    .replace(/\[\s*(?:YEAR)\s*\]/gi, year);
+}
+
+// ── SMART DOCUMENT TITLE ──
+// Builds a clean professional title like:
+//   "Press Accreditation Letter – Aminu Garba"
+//   "Affidavit of John Adeyemi"
+//   "Tenancy Agreement – Emeka Obi & Chidi Nwosu"
+// Never returns the raw user prompt verbatim.
+function extractDocTitle(content, userMessage) {
+  const clean = s => s.replace(/\s*\(.*?\)/g, '').replace(/\s*\[.*?\]/g, '').trim().replace(/[,;]+$/, '').slice(0, 40);
+  const toTitleCase = s => s.toLowerCase().replace(/\b([a-z])/g, m => m.toUpperCase()).replace(/\b(Of|For|And|To|The|In|A|An|On|At|By|With)\b/g, m => m.toLowerCase()).replace(/^./, m => m.toUpperCase());
+
+  // 1. Infer the document TYPE from user message
+  const um = (userMessage || '').trim();
+  // Strip leading verbs
+  let typeFromMsg = um.replace(/^(please\s+)?(could\s+you\s+)?(can\s+you\s+)?(help\s+(me\s+)?(to\s+)?)?(draft|prepare|write|generate|create|produce|make|compose|do\s+up)\s+(me\s+)?(a\s+|an\s+|the\s+)?/i, '').trim();
+  // Take up to " for "/" between "/" to "/" of "/" with "/etc — the doc TYPE ends before the party detail clause
+  const splitMatch = typeFromMsg.match(/^([\w\s-]+?)(?:\s+(?:for|between|to|with|on behalf of|on)\s+.+)?$/i);
+  let docType = (splitMatch ? splitMatch[1] : typeFromMsg).replace(/[.,;:!?]+$/, '').trim();
+  // Cap length & title-case
+  docType = toTitleCase(docType.slice(0, 60)) || 'Legal Document';
+
+  if (!content) return docType;
   const t = content.slice(0, 3000);
 
-  // Helper: clean extracted name (remove trailing junk, trim)
-  const clean = s => s.replace(/\s*\(.*?\)/g, '').replace(/\s*\[.*?\]/g, '').trim().replace(/[,;]+$/, '').slice(0, 40);
-
-  // 1. Affidavit "I, Full Name," or "I, Full Name ("
-  const affMatch = t.match(/\bI,\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3})\s*[,(]/);
+  // 2. Look for party names IN THE CONTENT
+  // Affidavit "I, Full Name,"
+  const affMatch = t.match(/\bI,\s+([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){1,3})\s*[,(]/);
   if (affMatch) return `Affidavit of ${clean(affMatch[1])}`;
 
-  // 2. BETWEEN: PARTY1 (description) AND PARTY2 — most agreements/deeds
+  // BETWEEN: P1 AND P2
   const btwnMatch = t.match(/BETWEEN[:\s]+([A-Z][A-Za-z\s]{2,38}?)(?:\s*\([^)]*\))?\s+AND\s+([A-Z][A-Za-z\s]{2,38}?)(?:\s*\(|\s*$|\n)/m);
   if (btwnMatch) {
     const p1 = clean(btwnMatch[1]), p2 = clean(btwnMatch[2]);
-    if (p1 && p2 && !p1.includes('[') && !p2.includes('[')) return `${type} – ${p1} & ${p2}`;
+    if (p1 && p2 && !p1.includes('[') && !p2.includes('[')) return `${docType} – ${p1} & ${p2}`;
   }
 
-  // 3. "THIS [X] made ... between PARTY1 and PARTY2"
+  // THIS X made between P1 and P2
   const thisMatch = t.match(/THIS\s+[\w\s]+?\s+(?:is made|made|entered into)[^.]*?between\s+([A-Z][A-Za-z\s]{2,38}?)\s+(?:and|AND)\s+([A-Z][A-Za-z\s]{2,38}?)(?:\s*[\(,\n.]|$)/i);
   if (thisMatch) {
     const p1 = clean(thisMatch[1]), p2 = clean(thisMatch[2]);
-    if (p1 && p2 && !p1.includes('[') && !p2.includes('[')) return `${type} – ${p1} & ${p2}`;
+    if (p1 && p2 && !p1.includes('[') && !p2.includes('[')) return `${docType} – ${p1} & ${p2}`;
   }
 
-  // 4. Employer / Employee pattern (employment contracts)
+  // Employer / Employee
   const empMatch = t.match(/Employer[:\s]+([A-Z][A-Za-z\s]{2,35}?)(?:\s*\(|\n|,)/i);
   const eeMatch  = t.match(/Employee[:\s]+([A-Z][A-Za-z\s]{2,35}?)(?:\s*\(|\n|,)/i);
   if (empMatch && eeMatch) {
     const p1 = clean(empMatch[1]), p2 = clean(eeMatch[1]);
-    if (!p1.includes('[') && !p2.includes('[')) return `${type} – ${p1} & ${p2}`;
+    if (!p1.includes('[') && !p2.includes('[')) return `${docType} – ${p1} & ${p2}`;
   }
 
-  // 5. First # heading (document title set by Claude)
+  // Letters/applications addressed to a person or organisation:
+  //   "Dear Mr. Adeyemi" or "ATTN: Aminu Garba" or "To: Aminu Garba"
+  const addrMatch = t.match(/(?:Dear\s+(?:Mr|Mrs|Miss|Ms|Dr|Prof|Sir|Madam|Hon)\.?\s+|ATTN[:\s]+|To[:\s]+|Addressed\s+to[:\s]+)([A-Z][A-Za-z']+(?:\s+[A-Z][A-Za-z']+){0,3})/);
+  if (addrMatch) {
+    const recipient = clean(addrMatch[1]);
+    if (recipient && !recipient.includes('[') && recipient.length > 2) return `${docType} – ${recipient}`;
+  }
+
+  // "for Mr. Aminu Garba" / "for Aminu Garba" found in user message
+  const forMsgMatch = um.match(/\bfor\s+(?:Mr\.?\s+|Mrs\.?\s+|Miss\s+|Ms\.?\s+|Dr\.?\s+|Prof\.?\s+|Hon\.?\s+)?([A-Z][A-Za-z']+(?:\s+[A-Z][A-Za-z']+){0,3})/);
+  if (forMsgMatch) {
+    return `${docType} – ${clean(forMsgMatch[1])}`;
+  }
+
+  // First # heading from the AI (if it set a real title)
   const heading = t.match(/^#{1,2}\s+(.+)$/m);
   if (heading) {
     const h = heading[1].replace(/\*\*/g, '').trim();
-    if (h.length <= 80 && !h.includes('[') && !h.toLowerCase().startsWith('legal document')) return h;
+    if (h.length <= 80 && !h.includes('[') && !/^legal\s+document$/i.test(h)) return h;
   }
 
-  return type; // fallback
+  return docType;
 }
 
 async function openSavedDoc(docId) {
@@ -3216,7 +3274,8 @@ async function openSavedDoc(docId) {
       .single();
     if (error) throw error;
     closeDocsPanel();
-    openDocViewer(mdToHtml(data.content), data.content, data.title || 'Legal Document');
+    const filledContent = fillDatePlaceholders(data.content);
+    openDocViewer(mdToHtml(filledContent), filledContent, data.title || 'Legal Document');
   } catch(e) {
     alert('Failed to open document');
   }
@@ -4318,9 +4377,10 @@ async function startDocumentFlow(docType) {
       }
 
       if (reply) {
-        // Smart title — extract real party names from document
-        const _docTypeFallback = docType.charAt(0).toUpperCase() + docType.slice(1);
-        const docTitle = extractDocTitle(reply, _docTypeFallback);
+        // Auto-fill date placeholders
+        reply = fillDatePlaceholders(reply);
+        // Smart title — pass the original user message
+        const docTitle = extractDocTitle(reply, userMsg);
 
         // Open A4 viewer immediately
         openDocViewer(reply, reply, docTitle);
