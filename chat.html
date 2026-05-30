@@ -3089,10 +3089,16 @@ async function loadUserDocuments() {
 // Robust content-pattern detection: does this text LOOK like a Nigerian legal doc?
 // Used as a final safety net when X-Intent routing missed.
 function looksLikeLegalDocument(text) {
-  if (!text || text.length < 400) return false;
-  const hasStructuralHeader = /\b(?:AFFIDAVIT|AGREEMENT|DEED|PETITION|MOTION ON NOTICE|WRIT OF SUMMONS|NOTICE TO QUIT|MEMORANDUM|TENANCY AGREEMENT|LEASE AGREEMENT|POWER OF ATTORNEY|STATUTORY DECLARATION|LETTER OF DEMAND|FREEDOM OF INFORMATION|FOI REQUEST|PRESS ACCREDITATION|EMPLOYMENT CONTRACT|PARTNERSHIP AGREEMENT|NON-DISCLOSURE|SERVICE AGREEMENT|WHEREAS|NOW THIS DEED|IN THE\s+(?:HIGH|FEDERAL|SUPREME|MAGISTRATE)\s+COURT|TAKE NOTICE|SUIT NO)\b/.test(text);
-  const hasExecutionMarker = /\b(?:signed|signature|sworn|deponent|jurat|executed|in witness whereof|commissioner for oaths|witness)\b/i.test(text);
-  return hasStructuralHeader && hasExecutionMarker;
+  if (!text || text.length < 350) return false;
+  // CASE-INSENSITIVE: journalist FOI docs sometimes use "Freedom of Information"
+  // (Title Case) rather than "FREEDOM OF INFORMATION" — the case-sensitive
+  // version missed these and broke the card render for journalists.
+  const hasStructuralHeader = /\b(?:affidavit|agreement|deed|petition|motion(?:\s+on\s+notice)?|writ(?:\s+of\s+summons)?|notice to quit|memorandum|tenancy|lease|power of attorney|statutory declaration|letter of demand|freedom of information|FOI\s+request|press accreditation|employment contract|partnership agreement|non-disclosure|confidentiality|service agreement|consultancy agreement|shareholders?\s+agreement|whereas|now this deed|in the\s+(?:high|federal|supreme|magistrate|court of appeal|national industrial)\s+court|take notice|suit\s+no|hereby (?:declare|undertake|certify|agree)|pursuant to (?:section|the))\b/i.test(text);
+  const hasExecutionMarker = /\b(?:signed|signature|sworn|deponent|jurat|executed|in witness whereof|commissioner for oaths|witness|signatory|undersigned|dear sir|dear madam|yours (?:faithfully|sincerely)|notary public)\b/i.test(text);
+  // ALSO accept long structured legal-looking responses (numbered clauses with formal indicators)
+  const hasNumberedClauses = (text.match(/^\s*\d+\.\s+/gm) || []).length >= 4;
+  const hasFormalTerms = /\b(?:hereinafter|the\s+(?:landlord|tenant|applicant|petitioner|respondent|claimant|defendant|party|parties|company|employer|employee|deponent))\b/i.test(text);
+  return (hasStructuralHeader && hasExecutionMarker) || (hasNumberedClauses && hasFormalTerms && text.length > 800);
 }
 
 // Render the document card + open A4 viewer + save to library + persist messages.
@@ -3282,6 +3288,13 @@ function fillNamePlaceholders(text, userMessage) {
 function stripAIDisclaimers(text) {
   if (!text) return text;
   return text
+    // ── Strip wrapping markdown code fences ──
+    // The AI sometimes wraps the entire doc in ```...``` or ```markdown ...```
+    // which causes mdToHtml to render it as a code block (dark background) —
+    // looked like a "black card" for users. Always pull the doc out of fences.
+    .replace(/^\s*```(?:markdown|md|html|text|legal|document|doc)?\s*\n([\s\S]*?)\n```\s*$/i, '$1')
+    .replace(/^\s*```\s*\n/, '')
+    .replace(/\n```\s*$/, '')
     // Internal routing marker — must NEVER reach the user.
     // Match at start of string or after a newline, with any spacing variant.
     .replace(/(^|\n)\s*NEED_DETAILS\s*:\s*/gi, '$1')

@@ -255,7 +255,9 @@ ${docTemplate}`;
     if (userType === 'lawyer' && profile?.specializations?.length) {
       systemPrompt += `\nUser's practice specializations: ${profile.specializations.join(', ')}.`;
     }
-    systemPrompt += `\n\nIMPORTANT: Output ONLY the legal document. No introduction sentence ("Here is your..."), no closing prose ("This document means...", "Let me know if..."), no plain-English explanation appended. The document must START with the formal heading (e.g. "# AFFIDAVIT", "IN THE HIGH COURT...", "THIS TENANCY AGREEMENT...") and END with the signature/jurat/execution block. Nothing else.`;
+    systemPrompt += `\n\nIMPORTANT: Output ONLY the legal document. No introduction sentence ("Here is your..."), no closing prose ("This document means...", "Let me know if..."), no plain-English explanation appended. The document must START with the formal heading (e.g. "# AFFIDAVIT", "IN THE HIGH COURT...", "THIS TENANCY AGREEMENT...") and END with the signature/jurat/execution block. Nothing else.
+
+NEVER wrap the document in markdown code fences (\`\`\`). Output the document directly as plain markdown content with # / ## / **bold** formatting — never as a code block.`;
 
     // Inject conversation summary for context
     if (summary) {
