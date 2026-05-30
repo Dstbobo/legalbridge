@@ -3190,6 +3190,9 @@ function nigerianDate(d) {
 function stripAIDisclaimers(text) {
   if (!text) return text;
   return text
+    // Internal routing marker — must NEVER reach the user.
+    // Match at start of string or after a newline, with any spacing variant.
+    .replace(/(^|\n)\s*NEED_DETAILS\s*:\s*/gi, '$1')
     // Knowledge cutoff disclaimers — every variation
     .replace(/\bmy\s+(?:knowledge|training\s+data|information)\s+(?:cut[\s-]?off|cutoff|ends?)\s+(?:is|in|on|date\s+is)?\s*(?:April|January|February|March|May|June|July|August|September|October|November|December)\s*\d{4}\.?/gi, '')
     .replace(/\b(?:I\s+(?:should\s+)?note|please\s+note|note\s+that|kindly\s+note|disclaimer)[^.\n]*\bknowledge\s+(?:cut[\s-]?off|cutoff)[^.\n]*\.?/gi, '')
@@ -3417,6 +3420,10 @@ function formatLegalDocHtml(text) {
 }
 
 function openDocViewer(htmlContent, rawText, title) {
+  // Defensive: NEED_DETAILS is an internal routing tag and must never display
+  const sanitize = s => (s || '').replace(/(^|\n)\s*NEED_DETAILS\s*:\s*/gi, '$1').trim();
+  rawText = sanitize(rawText);
+  htmlContent = sanitize(htmlContent);
   _docRawText = rawText || '';
   _docTitle = (title || 'LegalBridge_Document').replace(/[^a-zA-Z0-9_\- ]/g, '_');
   // Use raw text for proper legal formatting; fall back to stripping the passed HTML
