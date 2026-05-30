@@ -2946,12 +2946,15 @@ async function send() {
           const assistantMarker = savedDoc
             ? '__DOC__:' + savedDoc.id + ':' + docTitleClean
             : parsedText; // fallback: store full text if save failed
-          await sb.from('messages').insert([
-            { chat_id: currentChatId, role: 'user',      content: text },
-            { chat_id: currentChatId, role: 'assistant', content: assistantMarker }
-          ]).catch(e => console.error('Message insert error:', e));
-          await sb.from('chats').update({ updated_at: new Date().toISOString() })
-            .eq('id', currentChatId).catch(() => {});
+          try {
+            await sb.from('messages').insert([
+              { chat_id: currentChatId, role: 'user',      content: text },
+              { chat_id: currentChatId, role: 'assistant', content: assistantMarker }
+            ]);
+          } catch (e) { console.error('Message insert error:', e); }
+          try {
+            await sb.from('chats').update({ updated_at: new Date().toISOString() }).eq('id', currentChatId);
+          } catch (_) {}
 
           // Update card: show Saved or error
           const statusEl = document.querySelector('#' + _cardId + ' .doc-save-status');
@@ -4422,12 +4425,15 @@ async function startDocumentFlow(docType) {
         const assistantMarker = savedDoc
           ? '__DOC__:' + savedDoc.id + ':' + docTitle
           : reply;
-        await sb.from('messages').insert([
-          { chat_id: currentChatId, role: 'user',      content: userMsg },
-          { chat_id: currentChatId, role: 'assistant', content: assistantMarker }
-        ]).catch(e => console.error('Message insert error:', e));
-        await sb.from('chats').update({ updated_at: new Date().toISOString() })
-          .eq('id', currentChatId).catch(() => {});
+        try {
+          await sb.from('messages').insert([
+            { chat_id: currentChatId, role: 'user',      content: userMsg },
+            { chat_id: currentChatId, role: 'assistant', content: assistantMarker }
+          ]);
+        } catch (e) { console.error('Message insert error:', e); }
+        try {
+          await sb.from('chats').update({ updated_at: new Date().toISOString() }).eq('id', currentChatId);
+        } catch (_) {}
 
         const statusEl = document.querySelector('#' + _cardId + ' .doc-save-status');
         if (statusEl) statusEl.innerHTML = savedDoc
