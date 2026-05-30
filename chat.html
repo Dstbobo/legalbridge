@@ -1576,6 +1576,14 @@
     }
     .bottom-nav-item.active { color: var(--accent, #4a8ef5); }
     .bottom-nav-item svg { width: 20px; height: 20px; }
+    /* ── FLASH-FREE ROLE-GATED NAV ──
+       Hide role-gated items (sidebar + bottom tab) on first paint.
+       Hide the WHOLE bottom-nav so users don't see "5 items → 4 items" jump.
+       applyRoleNav() sets data-nav-ready="1" on <html> after the profile
+       loads, which reveals the bar in one paint with the correct items. */
+    html:not([data-nav-ready]) [data-roles] { display: none !important; }
+    html:not([data-nav-ready]) .bottom-nav { visibility: hidden; }
+    html[data-nav-ready] .bottom-nav { visibility: visible; }
 
     /* ── THREE DOT MENU ── */
     .dot-menu-wrap { position: relative; }
@@ -2826,37 +2834,63 @@ async function send() {
 
         // Track if the AI is asking for more details rather than generating
         let _needDetails = false;
+        // Stream timeout watchdog — long docs sometimes have multi-second gaps
+        // between chunks on slow networks. Default fetch streams have no
+        // built-in idle timeout; we use a generous 120s rolling timer so a
+        // brief stall doesn't kill an otherwise valid generation in progress.
+        const STALL_TIMEOUT_MS = 120000;
+        let _stallTimer = null;
+        let _stalled = false;
+        const _resetStall = () => {
+          if (_stallTimer) clearTimeout(_stallTimer);
+          _stallTimer = setTimeout(() => {
+            _stalled = true;
+            try { reader.cancel(); } catch (_) {}
+          }, STALL_TIMEOUT_MS);
+        };
+        _resetStall();
 
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          sseBuffer += decoder.decode(value, { stream: true });
-          const ssLines = sseBuffer.split('\n');
-          sseBuffer = ssLines.pop() || '';
-          for (const ssLine of ssLines) {
-            if (!ssLine.startsWith('data: ')) continue;
-            const ssData = ssLine.slice(6).trim();
-            if (ssData === '[DONE]') continue;
-            try {
-              const ssj = JSON.parse(ssData);
-              if (ssj.text) {
-                parsedText += ssj.text;
-                // Detect details-request response — switches us to conversational rendering
-                if (!_needDetails && parsedText.trimStart().startsWith('NEED_DETAILS:')) {
-                  _needDetails = true;
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            _resetStall();
+            if (done) break;
+            sseBuffer += decoder.decode(value, { stream: true });
+            const ssLines = sseBuffer.split('\n');
+            sseBuffer = ssLines.pop() || '';
+            for (const ssLine of ssLines) {
+              if (!ssLine.startsWith('data: ')) continue;
+              const ssData = ssLine.slice(6).trim();
+              if (ssData === '[DONE]') continue;
+              try {
+                const ssj = JSON.parse(ssData);
+                if (ssj.text) {
+                  parsedText += ssj.text;
+                  if (!_needDetails && parsedText.trimStart().startsWith('NEED_DETAILS:')) {
+                    _needDetails = true;
+                  }
+                  if (!isDocument || _needDetails) {
+                    const display = _needDetails
+                      ? parsedText.replace(/^NEED_DETAILS:\s*/i, '')
+                      : parsedText;
+                    _sDiv.innerHTML = mdToHtml(display);
+                    scrollDown();
+                  }
                 }
-                // Only re-render mid-stream for conversational or details mode; documents
-                // stay on the spinner until the card replaces them after the stream ends.
-                if (!isDocument || _needDetails) {
-                  const display = _needDetails
-                    ? parsedText.replace(/^NEED_DETAILS:\s*/i, '')
-                    : parsedText;
-                  _sDiv.innerHTML = mdToHtml(display);
-                  scrollDown();
-                }
-              }
-            } catch {}
+              } catch {}
+            }
           }
+        } catch (streamErr) {
+          // Connection interrupted — if we got SOMETHING that looks like a doc,
+          // proceed to render the card with what we have instead of failing hard.
+          console.warn('Stream interrupted:', streamErr?.message);
+        } finally {
+          if (_stallTimer) clearTimeout(_stallTimer);
+        }
+
+        // If stream stalled but we have substantial content, still try to render it.
+        if (_stalled && parsedText && parsedText.length > 400) {
+          parsedText += '\n\n*(Note: connection was interrupted during generation. Document may be incomplete — regenerate if needed.)*';
         }
 
         reply = parsedText;
@@ -3510,9 +3544,7 @@ function closeDocViewer() {
 function downloadDocPDF() {
   const title = _docTitle || 'LegalBridge_Document';
   const content = document.getElementById('docA4').innerHTML;
-  const win = window.open('', '_blank');
-  if (!win) { alert('Please allow popups to download PDF'); return; }
-  win.document.write(`<!DOCTYPE html><html><head>
+  const html = `<!DOCTYPE html><html><head>
 <meta charset="UTF-8"><title>${title}</title>
 <style>
   @page { size: A4; margin: 72pt; }
@@ -3528,10 +3560,35 @@ function downloadDocPDF() {
   hr { border: none; border-top: 1px solid #000; margin: 20px 0; }
   @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
 </style>
-</head><body>${content}</body></html>`);
-  win.document.close();
-  win.focus();
-  setTimeout(() => { win.print(); }, 400);
+</head><body>${content}</body></html>`;
+
+  // Try popup window first (cleanest UX on desktop)
+  const win = window.open('', '_blank');
+  if (win) {
+    win.document.write(html);
+    win.document.close();
+    win.focus();
+    setTimeout(() => { win.print(); }, 400);
+    return;
+  }
+
+  // Popup blocked (common on mobile + strict browsers) — use hidden iframe instead.
+  // This works without any user permission and prints the same A4-formatted output.
+  const existing = document.getElementById('lbPdfFrame');
+  if (existing) existing.remove();
+  const iframe = document.createElement('iframe');
+  iframe.id = 'lbPdfFrame';
+  iframe.style.cssText = 'position:fixed;width:0;height:0;border:0;left:-9999px;top:-9999px';
+  document.body.appendChild(iframe);
+  iframe.onload = () => {
+    try {
+      iframe.contentWindow.focus();
+      iframe.contentWindow.print();
+    } catch (e) {
+      alert('PDF print failed: ' + e.message);
+    }
+  };
+  iframe.srcdoc = html;
 }
 
 function copyDocText() {
@@ -3703,92 +3760,43 @@ function fillPrompt(text) {
 }
 
 function newCase() {
+  // Reset chat state
   history = [];
   currentChatId = null;
   queuedImages = [];
   renderImageQueue();
+
+  // Greeting line (uses the same name + greeting pattern as the returning-user welcome)
+  const nameEl = document.getElementById('userDisplayName');
+  const fullName = (nameEl?.textContent || '').trim();
+  const firstName = fullName ? fullName.split(' ')[0] : '';
+  const hour = new Date().getHours();
+  const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
+
+  const _roleSubtitles = {
+    lawyer: 'Your AI legal practice assistant',
+    student: 'Your Nigerian law research companion',
+    business: 'Your business legal advisor',
+    journalist: 'Your press law advisor'
+  };
+  const subtitle = _roleSubtitles[userProfile?.user_type] || 'Your personal AI legal assistant';
+
+  // Build the welcome with an EMPTY #starterCards container — populate AFTER
+  // injecting so no static set ever appears (avoiding the flash).
   document.getElementById('messagesInner').innerHTML = `
-    <div class="welcome" id="welcomeState">
+    <div class="welcome" id="welcomeState" style="padding:60px 24px 32px">
       <div class="welcome-glyph">LB</div>
-      <h1>How can LegalBridge help you?</h1>
-      <p>Describe your case from the beginning. LegalBridge will classify it, identify the right court, and walk you through the exact Nigerian legal procedure step by step.</p>
-      <div class="starters">
-        <div class="starter" onclick="fillPrompt('My neighbour encroached on my land and built a fence past my boundary marker...')">
-          <div class="starter-type">Land dispute</div>
-          <div class="starter-text">Neighbour encroached on my land and built a fence...</div>
-        </div>
-        <div class="starter" onclick="fillPrompt('I lent ₦500,000 to a business partner 8 months ago and he has refused to repay despite several demands...')">
-          <div class="starter-type">Debt recovery</div>
-          <div class="starter-text">Business partner has refused to repay a ₦500,000 loan...</div>
-        </div>
-        <div class="starter" onclick="fillPrompt('My client was arrested by the police and has been detained for over 48 hours without being charged to court...')">
-          <div class="starter-type">Criminal matter</div>
-          <div class="starter-text">Client detained over 48 hours without charge...</div>
-        </div>
-        <div class="starter" onclick="fillPrompt('My employer terminated my appointment without giving any notice period or paying my severance entitlements...')">
-          <div class="starter-type">Employment</div>
-          <div class="starter-text">Terminated without notice or severance pay...</div>
-        </div>
-        <div class="starter" onclick="fillPrompt('Police officers in uniform stopped my client on the road, physically assaulted him, extorted money from him and threatened to plant drugs on him if he refused to cooperate...')">
-          <div class="starter-type">Police harassment</div>
-          <div class="starter-text">Client assaulted and extorted by police officers on the road...</div>
-        </div>
-        <div class="starter" onclick="fillPrompt('My client was picked up by men claiming to be SARS operatives, taken to an unknown location, tortured for three days and forced to sign a confession without a lawyer present...')">
-          <div class="starter-type">SARS brutality</div>
-          <div class="starter-text">Client abducted, tortured and forced to sign confession by SARS...</div>
-        </div>
-        <div class="starter" onclick="fillPrompt('Government officials came with bulldozers and demolished my client\\'s property and shop without any prior notice, compensation or court order...')">
-          <div class="starter-type">Forced demolition</div>
-          <div class="starter-text">Government demolished client\\'s property without notice or compensation...</div>
-        </div>
-        <div class="starter" onclick="fillPrompt('A land grabber with thugs invaded my client\\'s land with a forged Certificate of Occupancy and has started building. My client has the original C of O...')">
-          <div class="starter-type">Land grabbing</div>
-          <div class="starter-text">Land grabbers with forged C of O invaded client\\'s property...</div>
-        </div>
-        <div class="starter" onclick="fillPrompt('My client\\'s landlord has locked up the apartment, seized his belongings and changed the locks without a court order, claiming unpaid rent of two months...')">
-          <div class="starter-type">Illegal eviction</div>
-          <div class="starter-text">Landlord locked out tenant and seized belongings without court order...</div>
-        </div>
-        <div class="starter" onclick="fillPrompt('EFCC operatives raided my client\\'s office and home, seized his phones, laptops and documents and have been holding him for 5 days without formal charges or access to his lawyer...')">
-          <div class="starter-type">EFCC detention</div>
-          <div class="starter-text">Client held by EFCC for 5 days without charge or legal access...</div>
-        </div>
-        <div class="starter" onclick="fillPrompt('My client was involved in a road accident caused by a danfo driver. He sustained serious injuries, lost his job and the driver\\'s union is threatening him not to pursue the matter...')">
-          <div class="starter-type">Road accident</div>
-          <div class="starter-text">Client injured in accident, union threatening him not to pursue case...</div>
-        </div>
-        <div class="starter" onclick="fillPrompt('A traditional ruler and family members are using community pressure and threats to seize my client\\'s inherited family land, claiming it belongs to the community. My client has the will and documents...')">
-          <div class="starter-type">Family land seizure</div>
-          <div class="starter-text">Traditional ruler seizing client\\'s inherited family land by force...</div>
-        </div>
-        <div class="starter" onclick="fillPrompt('My client paid ₦3.5 million to a property developer for a house. The developer has abandoned the project, is unreachable and has refused to refund the money...')">
-          <div class="starter-type">Property fraud</div>
-          <div class="starter-text">Developer collected ₦3.5M, abandoned project and disappeared...</div>
-        </div>
-        <div class="starter" onclick="fillPrompt('My client is a journalist who was arrested and detained for publishing a story about a government official. The authorities are claiming cybercrime and defamation...')">
-          <div class="starter-type">Press freedom</div>
-          <div class="starter-text">Journalist arrested and charged for publishing story on official...</div>
-        </div>
-        <div class="starter" onclick="fillPrompt('My client\\'s business partner secretly transferred company funds into a personal account, registered a competing company using the same business name and is now poaching clients...')">
-          <div class="starter-type">Business fraud</div>
-          <div class="starter-text">Partner diverted company funds and registered competing business...</div>
-        </div>
-        <div class="starter" onclick="fillPrompt('A hospital refused to treat my client\\'s child during an emergency, demanding upfront payment first. The child suffered serious harm due to the delay in receiving treatment...')">
-          <div class="starter-type">Medical negligence</div>
-          <div class="starter-text">Hospital refused emergency treatment, child harmed due to delay...</div>
-        </div>
-        <div class="starter" onclick="fillPrompt('My client was defrauded of ₦800,000 through a fake investment scheme on WhatsApp. The fraudster promised 50% returns in 30 days and has now gone silent...')">
-          <div class="starter-type">Investment fraud</div>
-          <div class="starter-text">Client defrauded ₦800K through fake WhatsApp investment scheme...</div>
-        </div>
-        <div class="starter" onclick="fillPrompt('DSS operatives arrested my client at his home at midnight without a warrant, have not disclosed any charges and have denied family members and his lawyer access to him for 72 hours...')">
-          <div class="starter-type">DSS detention</div>
-          <div class="starter-text">Client arrested by DSS at midnight, no warrant, no access to lawyer...</div>
-        </div>
-      </div>
+      <h1 style="font-size:28px;margin-bottom:14px">${firstName ? greeting + ', ' + firstName + '.' : 'How can LegalBridge help you?'}</h1>
+      <p style="max-width:340px;margin:0 auto 28px;opacity:0.55;font-size:15px;line-height:1.7">${subtitle}, built for Nigerian law.</p>
+      <div class="starters" id="starterCards"></div>
     </div>`;
+
+  // Populate role-aware starter cards (3 randomised from the user's role pool)
+  if (typeof populateStarterCards === 'function') populateStarterCards();
+
   document.getElementById('caseTitle').textContent = 'New case';
-  document.getElementById('caseTag').style.display = 'none';
+  const tagEl = document.getElementById('caseTag');
+  if (tagEl) tagEl.style.display = 'none';
   document.querySelectorAll('.case-row').forEach(r => r.classList.remove('active'));
   closeSidebar();
 }
@@ -4617,11 +4625,16 @@ function applyRoleNav() {
   const type = userProfile?.user_type || 'other';
   document.querySelectorAll('[data-roles]').forEach(el => {
     const roles = el.getAttribute('data-roles').split(',');
-    el.style.display = (roles.includes(type) || roles.includes('all')) ? '' : 'none';
+    const visible = (roles.includes(type) || roles.includes('all'));
+    // We force display:none/'' BEFORE setting the data-ready attribute below so
+    // there's no transitional frame where the wrong items show.
+    el.style.display = visible ? '' : 'none';
   });
   // Students see "My Research" instead of "My Cases" — they don't have legal cases
   const casesLabel = document.getElementById('sidebarCasesLabel');
   if (casesLabel) casesLabel.textContent = (type === 'student') ? 'My Research' : 'My Cases';
+  // Mark the document as ready so the CSS visibility veil is lifted in one frame.
+  document.documentElement.setAttribute('data-nav-ready', '1');
 }
 
 // ── BOTTOM TAB BAR ──

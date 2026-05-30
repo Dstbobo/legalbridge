@@ -324,10 +324,11 @@ ${docTemplate}`;
           },
           body: JSON.stringify({
             model: 'claude-sonnet-4-5',
-            max_tokens: 4096,
+            // 8192 supports long bail applications, source protection declarations,
+            // partnership agreements, full divorce petitions etc. without cut-off.
+            // Tenancy agreements were fitting in 4096; longer docs were not.
+            max_tokens: 8192,
             // Low temperature so name/charge/court extraction is DETERMINISTIC.
-            // High temp was causing the same prompt to extract "Emeka Nwosu"
-            // one time and emit [APPLICANT'S NAME] the next.
             temperature: 0.2,
             stream: true,
             system: systemPrompt,
