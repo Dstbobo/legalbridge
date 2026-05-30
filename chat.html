@@ -2642,7 +2642,9 @@ async function send() {
     const docType = detectDocRequest(text);
     if (docType) {
       busy = false;
-      await startDocumentFlow(docType);
+      // Pass the FULL original user text so the AI receives all the details
+      // (names, charges, sections, court, dates) — not the sanitised docType.
+      await startDocumentFlow(docType, text);
       return;
     }
 
@@ -4354,10 +4356,12 @@ function detectDocRequest(text) {
   return null;
 }
 
-async function startDocumentFlow(docType) {
+async function startDocumentFlow(docType, fullUserText) {
   if (busy) return;
 
-  const userMsg = `Draft a ${docType}`;
+  // Use the FULL user message if provided (preserves names, charges, dates).
+  // Falls back to a minimal label only if no original text is passed.
+  const userMsg = (fullUserText && fullUserText.trim()) || `Draft a ${docType}`;
   addUser(userMsg);
   history.push({ role: 'user', content: userMsg });
   showTyping(userMsg);
@@ -4367,6 +4371,7 @@ async function startDocumentFlow(docType) {
   // Create chat record early so sidebar updates before streaming finishes
   if (!currentChatId && currentUser && !savingChat) {
     savingChat = true;
+    // Title from docType keyword so the sidebar stays clean even when userMsg is long
     const chatTitle = docType.charAt(0).toUpperCase() + docType.slice(1);
     const { data: chat } = await sb
       .from('chats')
