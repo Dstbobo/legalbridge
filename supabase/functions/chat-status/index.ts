@@ -1,7 +1,11 @@
 // SUPABASE FUNCTION: chat-status
 // JWT verification: OFF
-// Purpose: Ultra-fast lightweight status message generation
-// Returns: JSON { status: "emoji + short message" }
+// Purpose: Ultra-fast lightweight status message generation.
+//          The status string ALWAYS comes from the AI reading the actual
+//          user message — there are NO hardcoded status strings anywhere.
+//          On failure it returns an empty status so the UI simply keeps
+//          showing its animated dots (never a generic fallback message).
+// Returns: JSON { status: "short natural message" }
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
@@ -19,47 +23,59 @@ serve(async (req) => {
     const { message = '', userType = 'other' } = await req.json();
     const roleLabel: Record<string, string> = {
       lawyer: 'lawyer', student: 'law student', business: 'business owner',
-      journalist: 'journalist', other: 'individual', individual: 'individual'
+      journalist: 'journalist', other: 'an ordinary person', individual: 'an ordinary person'
     };
-    const role = roleLabel[userType] || 'user';
+    const role = roleLabel[userType] || 'a user';
 
     const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_KEY}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${GEMINI_KEY}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          contents: [{ parts: [{ text: `You are a status message generator for LegalBridge, a Nigerian legal AI platform.
+          contents: [{ parts: [{ text: `You are LegalBridge, a Nigerian legal AI assistant. The user (${role}) just sent you a message. Before you answer, you say ONE very short line telling them what you are about to do — like a person briefly saying what they're doing right now.
 
-The user (a ${role}) just sent: "${message.slice(0, 200)}"
+User's message: "${message.slice(0, 250)}"
 
-Generate ONE short status message (max 8 words) describing what LegalBridge is about to do. Start with a relevant emoji. Be specific — never generic.
+Write that one short status line. Rules:
+- Maximum 6 words. Usually 2-4 words.
+- Present continuous, ending in "..." (e.g. "Drafting...", "Looking into that...").
+- Match the message exactly. A greeting gets a greeting. A document request names the document. A legal question says you're checking the law.
+- Sound natural and human, never robotic or generic. Do NOT say "Searching database" or "Processing request".
+- No emojis. No quotes. Just the line.
 
-Good examples:
-- "✍️ Drafting your tenancy agreement..."
-- "⚖️ Checking bail requirements..."
-- "📚 Searching Evidence Act provisions..."
-- "🏛️ Looking up CAC registration steps..."
-- "💬 Getting ready to chat..."
-- "🔍 Finding landlord eviction case law..."
+Examples of the exact tone:
+Message: "It's going fine" -> Responding...
+Message: "Draft me a tenancy agreement" -> Drafting your tenancy agreement...
+Message: "What is the Land Use Act" -> Looking into that...
+Message: "Hello" -> Hello...
+Message: "My landlord locked me out" -> Checking your rights as a tenant...
+Message: "Thanks so much" -> You're welcome...
+Message: "Help me register my business with CAC" -> Pulling up the CAC steps...
 
-Reply with ONLY the status message.` }] }],
-          generationConfig: { temperature: 0.3, maxOutputTokens: 25 }
+Now write the status line for the user's message:` }] }],
+          // thinkingBudget: 0 disables the model's internal reasoning so the
+          // tiny token budget goes entirely to the visible status line (fast + cheap).
+          generationConfig: { temperature: 0.4, maxOutputTokens: 24, thinkingConfig: { thinkingBudget: 0 } }
         })
       }
     );
 
     const d = await res.json();
-    const status = d.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '📚 Searching Nigerian law...';
+    let status = d.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
+    // Strip any surrounding quotes the model may add; reject anything too long.
+    status = status.replace(/^["'`]+|["'`]+$/g, '').trim();
+    if (status.length > 60) status = '';
 
     return new Response(
-      JSON.stringify({ status: status.length < 80 ? status : '📚 Searching Nigerian law...' }),
+      JSON.stringify({ status }),
       { headers: { ...CORS, 'Content-Type': 'application/json' } }
     );
 
   } catch {
+    // No hardcoded message — empty status keeps the UI on its animated dots.
     return new Response(
-      JSON.stringify({ status: '📚 Searching Nigerian law database...' }),
+      JSON.stringify({ status: '' }),
       { headers: { ...CORS, 'Content-Type': 'application/json' } }
     );
   }

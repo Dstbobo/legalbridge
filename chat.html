@@ -2075,10 +2075,10 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
 let currentUser = null;
 let userProfile = null;
 
-// ── CONTEXTUAL LOADING MESSAGES BY USER TYPE ──
 // ── DYNAMIC AI-GENERATED STATUS MESSAGE ──
-// Calls a lightweight edge function that uses Gemini Flash to generate
-// a natural, specific status message while the main response streams in.
+// The status text comes ONLY from a fast lightweight AI call that reads the
+// actual user message. There is no hardcoded fallback and no generic
+// placeholder — until the AI status arrives, only the animated dots show.
 function fireStatusUpdate(userMsg) {
   const type = userProfile?.user_type || 'other';
   fetch(`${SUPABASE_URL}/functions/v1/chat-status`, {
@@ -2089,12 +2089,13 @@ function fireStatusUpdate(userMsg) {
   .then(r => r.json())
   .then(d => {
     const el = document.getElementById('loadingMsg');
+    // Only show if the typing indicator is still up and the AI returned text.
     if (el && d.status) {
-      el.style.opacity = '0';
-      setTimeout(() => { el.textContent = d.status; el.style.opacity = '1'; }, 150);
+      el.textContent = d.status;
+      el.style.opacity = '1';
     }
   })
-  .catch(() => {}); // silent — main response will arrive regardless
+  .catch(() => {}); // silent — dots keep animating, main response arrives regardless
 }
 
 // ── DYNAMIC SUGGESTION CARDS ──
@@ -2403,11 +2404,12 @@ function showTyping(userMsg) {
     <div class="msg-avatar" style="background:var(--surface-2);border:1px solid var(--border-hover);font-family:var(--font-serif);font-style:italic;font-size:13px;color:var(--accent);">LB</div>
     <div style="display:flex;flex-direction:column;gap:6px">
       <div class="dots"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>
-      <div style="font-size:12px;color:var(--text-muted);font-style:italic;transition:opacity 0.15s" id="loadingMsg">Thinking...</div>
+      <div style="font-size:12px;color:var(--text-muted);font-style:italic;transition:opacity 0.2s;opacity:0;min-height:16px" id="loadingMsg"></div>
     </div>`;
   document.getElementById('messagesInner').appendChild(el);
   scrollDown();
-  // Fire AI status generation in background — updates #loadingMsg when ready
+  // Fire AI status generation — the ONLY source of the status text.
+  // Until it returns, just the animated dots show (no placeholder text).
   if (userMsg) fireStatusUpdate(userMsg);
 }
 
