@@ -1901,7 +1901,7 @@
         <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
         My Cases
       </a>
-      <a class="sidebar-nav-item" data-roles="all" href="javascript:void(0)" onclick="closeSidebar();openDocLibrary()">
+      <a class="sidebar-nav-item" data-roles="all" href="javascript:void(0)" onclick="closeSidebar();openDocsPanel()">
         <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8" stroke-width="1.8"/><line x1="16" y1="13" x2="8" y2="13" stroke-width="1.8"/><line x1="16" y1="17" x2="8" y2="17" stroke-width="1.8"/></svg>
         Documents
       </a>
@@ -1909,21 +1909,13 @@
         <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-2 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/></svg>
         Register My Business
       </a>
-      <a class="sidebar-nav-item" data-roles="lawyer" href="javascript:void(0)" onclick="closeSidebar();fillPrompt('Help me manage my client matters. What would you like to know about client management for a Nigerian law practice?');setTimeout(()=>{const i=document.getElementById(\'chatInput\');if(i&&i.value.trim())send();},100)">
+      <a class="sidebar-nav-item" data-roles="lawyer" href="javascript:void(0)" onclick="closeSidebar();openMyClients()">
         <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
         My Clients
       </a>
       <a class="sidebar-nav-item" data-roles="all" href="javascript:void(0)" onclick="closeSidebar();openResearchTools()">
         <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/></svg>
         Research Tools
-      </a>
-      <a class="sidebar-nav-item" data-roles="all" href="#" onclick="closeSidebar()">
-        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><circle cx="12" cy="12" r="3" stroke-width="1.8"/></svg>
-        Settings
-      </a>
-      <a class="sidebar-nav-item" data-roles="all" onclick="showInstallPopup();closeSidebar()">
-        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
-        Install App
       </a>
     </div>
 
@@ -4876,6 +4868,74 @@ const RESEARCH_TOOLS = {
 // Map 'other' to individual
 RESEARCH_TOOLS.other = RESEARCH_TOOLS.individual;
 
+// ── MY CLIENTS (Lawyer only) ──
+async function openMyClients() {
+  const overlay = document.getElementById('myClientsOverlay');
+  if (!overlay) return;
+  overlay.style.display = 'flex';
+  document.body.style.overflow = 'hidden';
+  const body = document.getElementById('myClientsBody');
+  body.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted)">Loading clients…</div>';
+
+  // Load chats where this lawyer has had consultations
+  // For now, show the lawyer's recent cases as client interactions
+  try {
+    const { data: chats } = await sb
+      .from('chats')
+      .select('*')
+      .eq('user_id', currentUser.id)
+      .order('updated_at', { ascending: false })
+      .limit(50);
+
+    if (!chats || chats.length === 0) {
+      body.innerHTML = `
+        <div style="text-align:center;padding:60px 20px">
+          <div style="font-size:48px;margin-bottom:16px;opacity:0.3">👥</div>
+          <div style="font-size:16px;font-weight:600;margin-bottom:6px;color:var(--text)">No clients yet</div>
+          <div style="font-size:13px;color:var(--text-muted);max-width:300px;margin:0 auto;line-height:1.6">
+            When clients consult or hire you through LegalBridge, they will appear here.
+            Share your profile to attract clients.
+          </div>
+        </div>`;
+      return;
+    }
+
+    // Group by unique case titles as "clients"
+    let html = `<div style="margin-bottom:20px">
+      <div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:4px">${chats.length} Active Matter${chats.length !== 1 ? 's' : ''}</div>
+      <div style="font-size:12px;color:var(--text-muted)">Cases and consultations from your practice</div>
+    </div>`;
+
+    html += chats.map(c => {
+      const date = new Date(c.updated_at).toLocaleDateString('en-NG', { day: 'numeric', month: 'short', year: 'numeric' });
+      const safeTitle = (c.title || 'Untitled').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+      return `<div style="background:var(--surface-2);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:10px;cursor:pointer;transition:border-color 0.15s" onclick="closeMyClients();openChat('${c.id}','${safeTitle}',null)" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'">
+        <div style="display:flex;align-items:center;gap:12px">
+          <div style="width:40px;height:40px;border-radius:50%;background:rgba(74,142,245,0.15);display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0">⚖️</div>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:14px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${c.title || 'Untitled Case'}</div>
+            <div style="font-size:12px;color:var(--text-muted);margin-top:2px;display:flex;gap:10px;align-items:center">
+              <span>${date}</span>
+              <span style="padding:1px 8px;border-radius:10px;font-size:10px;font-weight:700;background:rgba(34,197,94,0.15);color:#22c55e">Active</span>
+            </div>
+          </div>
+          <div style="font-size:12px;color:var(--accent);font-weight:600">Open →</div>
+        </div>
+      </div>`;
+    }).join('');
+
+    body.innerHTML = html;
+  } catch (e) {
+    body.innerHTML = `<div style="text-align:center;padding:40px;color:#e8908a">Failed to load clients: ${e.message || ''}</div>`;
+  }
+}
+
+function closeMyClients() {
+  const overlay = document.getElementById('myClientsOverlay');
+  if (overlay) overlay.style.display = 'none';
+  document.body.style.overflow = '';
+}
+
 function openResearchTools() {
   const overlay = document.getElementById('researchOverlay');
   if (!overlay) return;
@@ -5627,6 +5687,17 @@ function openSettings() {
 })();
 </script>
 
+<!-- ── MY CLIENTS OVERLAY (Lawyers only) ── -->
+<div id="myClientsOverlay" style="display:none;position:fixed;inset:0;z-index:5200;background:var(--bg);flex-direction:column;overflow:hidden">
+  <div style="display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--border);flex-shrink:0;background:var(--surface)">
+    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" style="width:20px;height:20px;opacity:0.7"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+    <h2 style="flex:1;margin:0;font-size:17px;font-weight:700">My Clients</h2>
+    <span style="padding:3px 12px;border-radius:20px;font-size:12px;font-weight:700;background:rgba(74,142,245,0.12);color:#4a8ef5;border:1px solid rgba(74,142,245,0.25)">LAWYER</span>
+    <button onclick="closeMyClients()" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:20px;padding:4px 8px;border-radius:6px">✕</button>
+  </div>
+  <div id="myClientsBody" style="flex:1;overflow-y:auto;padding:20px"></div>
+</div>
+
 <!-- ── RESEARCH TOOLS OVERLAY ── -->
 <div id="researchOverlay">
   <div class="rt-header">
@@ -5658,8 +5729,13 @@ function openSettings() {
       <h2 style="flex:1;margin:0;font-size:16px;font-weight:600">My Documents</h2>
       <button class="docs-panel-close" onclick="closeDocsPanel()">✕</button>
     </div>
+    <div style="padding:10px 12px;border-bottom:1px solid var(--border)">
+      <button onclick="closeDocsPanel();openDocLibrary()" style="width:100%;padding:10px;background:var(--accent);color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;font-family:var(--font-sans)">
+        ✦ Browse & Generate New Document
+      </button>
+    </div>
     <div class="docs-panel-body" id="docsPanelBody">
-      <div class="docs-panel-empty" id="docsEmptyState">
+      <div class="docs-panel-empty" id="docsEmptyState" style="display:flex;flex-direction:column;align-items:center">
         <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
         <div style="font-size:14px;font-weight:600;margin-bottom:6px">No documents yet</div>
         <div style="font-size:13px;color:var(--text-muted)">Documents you draft will appear here</div>
