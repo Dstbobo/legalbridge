@@ -4,6 +4,99 @@ const ANTHROPIC_KEY = Deno.env.get("ANTHROPIC_API_KEY")!;
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
+// ══════════════════════════════════════════════════════
+// TEMPLATE LOOKUP — fetch a stored template that matches
+// the user's request. Returns null if no template matches.
+// ══════════════════════════════════════════════════════
+const TEMPLATE_ALIASES: Record<string, string> = {
+  // Map common phrasings → canonical document_type values stored in the DB
+  'affidavit': 'general affidavit',
+  'loss affidavit': 'affidavit of loss',
+  'name change': 'affidavit of change of name',
+  'change of name': 'affidavit of change of name',
+  'next of kin': 'affidavit of next of kin',
+  'age declaration': 'statutory declaration of age',
+  'bail': 'bail application',
+  'writ': 'writ of summons',
+  'statement of claim': 'statement of claim',
+  'statement of defence': 'statement of defence',
+  'statement of defense': 'statement of defence',
+  'motion': 'motion on notice',
+  'ex parte': 'motion ex parte',
+  'appeal': 'notice of appeal',
+  'fundamental rights': 'fundamental rights enforcement application',
+  'frep': 'fundamental rights enforcement application',
+  'tenancy': 'tenancy agreement',
+  'lease': 'tenancy agreement',
+  'deed of assignment': 'deed of assignment',
+  'land assignment': 'deed of assignment',
+  'power of attorney': 'power of attorney',
+  'poa': 'power of attorney',
+  'quit notice': 'notice to quit',
+  'notice to quit': 'notice to quit',
+  'deed of gift': 'deed of gift',
+  'partnership': 'partnership agreement',
+  'nda': 'non-disclosure agreement',
+  'non-disclosure': 'non-disclosure agreement',
+  'non disclosure': 'non-disclosure agreement',
+  'confidentiality agreement': 'non-disclosure agreement',
+  'board resolution': 'board resolution',
+  'service agreement': 'service agreement',
+  'consultancy': 'service agreement',
+  'mou': 'memorandum of understanding',
+  'memorandum of understanding': 'memorandum of understanding',
+  'employment contract': 'employment contract',
+  'contract of employment': 'employment contract',
+  'appointment letter': 'offer letter',
+  'offer letter': 'offer letter',
+  'termination': 'termination letter',
+  'termination letter': 'termination letter',
+  'query letter': 'query letter',
+  'will': 'last will and testament',
+  'last will': 'last will and testament',
+  'divorce': 'divorce petition',
+  'dissolution of marriage': 'divorce petition',
+  'loan': 'loan agreement',
+  'loan agreement': 'loan agreement',
+  'promissory note': 'promissory note',
+  'foi': 'FOI request',
+  'foi request': 'FOI request',
+  'freedom of information': 'FOI request',
+  'press accreditation': 'press accreditation letter',
+  'demand letter': 'letter of demand',
+  'letter of demand': 'letter of demand',
+  'cease and desist': 'cease and desist letter',
+  'copyright assignment': 'copyright assignment',
+  'cac business name': 'CAC business name registration application',
+  'business name registration': 'CAC business name registration application',
+  'invitation letter': 'invitation letter',
+  'visa invitation': 'invitation letter',
+};
+
+function canonicaliseDocType(message: string): string | null {
+  const m = message.toLowerCase();
+  // Sort aliases longest first so "non-disclosure agreement" beats "non-disclosure"
+  const keys = Object.keys(TEMPLATE_ALIASES).sort((a, b) => b.length - a.length);
+  for (const k of keys) {
+    // word-boundary match
+    const rx = new RegExp(`\\b${k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+    if (rx.test(m)) return TEMPLATE_ALIASES[k];
+  }
+  return null;
+}
+
+async function fetchTemplate(docType: string): Promise<{ content: string; title: string; is_official: boolean; applicable_law?: string } | null> {
+  try {
+    const res = await fetch(
+      `${SUPABASE_URL}/rest/v1/document_templates?document_type=eq.${encodeURIComponent(docType)}&select=content,title,is_official,applicable_law&limit=1`,
+      { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
+    );
+    if (!res.ok) return null;
+    const rows = await res.json();
+    return rows && rows[0] ? rows[0] : null;
+  } catch { return null; }
+}
+
 const CORS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -207,6 +300,13 @@ serve(async (req) => {
     const docType = detectDocumentType(lastMsg);
     const docTemplate = DOCUMENT_PROMPTS[docType] || DOCUMENT_PROMPTS['agreement'];
 
+    // ── TEMPLATE LOOKUP ──
+    // If we have a stored template that matches the user's request, switch
+    // to "fill-the-template" mode (cheaper, faster, more consistent).
+    // Otherwise fall back to full AI generation using DOCUMENT_PROMPTS.
+    const aliasedType = canonicaliseDocType(lastMsg);
+    const storedTemplate = aliasedType ? await fetchTemplate(aliasedType) : null;
+
     // Build system prompt
     let systemPrompt = `You are LegalBridge AI, built by DST Global Innovative Nigeria Ltd (Akwanga, Nasarawa State), founded by Daniel Thankgod. Never mention Google, Gemini, Claude, Anthropic, or any underlying AI technology. Never mention any knowledge cutoff date. Never include AI disclaimers inside a document.
 
@@ -258,6 +358,17 @@ ${docTemplate}`;
     systemPrompt += `\n\nIMPORTANT: Output ONLY the legal document. No introduction sentence ("Here is your..."), no closing prose ("This document means...", "Let me know if..."), no plain-English explanation appended. The document must START with the formal heading (e.g. "# AFFIDAVIT", "IN THE HIGH COURT...", "THIS TENANCY AGREEMENT...") and END with the signature/jurat/execution block. Nothing else.
 
 NEVER wrap the document in markdown code fences (\`\`\`). Output the document directly as plain markdown content with # / ## / **bold** formatting — never as a code block.`;
+
+    // ── TEMPLATE-FILL MODE ──
+    // If we have a stored Nigerian legal template, switch Claude into a
+    // "fill the placeholders" task — much cheaper and more consistent than
+    // full generation. Official court forms preserve their structure exactly.
+    if (storedTemplate) {
+      const fillInstruction = storedTemplate.is_official
+        ? `\n\n[FILL-TEMPLATE MODE — OFFICIAL FORM]\nThe following is a Nigerian legal template that MUST be followed structurally without modification. Fill in every \`{{PLACEHOLDER}}\` with the actual value from the user's message or the Nigerian-context default (today's date is ${nigerianToday()}). Do NOT add new sections, do NOT remove sections, do NOT rewrite paragraphs. ONLY substitute placeholders.\n\n${storedTemplate.applicable_law ? `Applicable Law: ${storedTemplate.applicable_law}\n\n` : ''}TEMPLATE:\n${storedTemplate.content}\n[END TEMPLATE]`
+        : `\n\n[FILL-TEMPLATE MODE — LAWYER-DRAFTED]\nThe following is a Nigerian legal template authored by senior practitioners. Use it as the structural basis for your draft. Fill in every \`{{PLACEHOLDER}}\` with the actual value from the user's message or a sensible Nigerian-context default (today's date is ${nigerianToday()}). You may add minor extra clauses if the user's facts clearly require them, but you must preserve the template's structure, headings, and legal language. Do NOT rewrite sections that are already complete.\n\n${storedTemplate.applicable_law ? `Applicable Law: ${storedTemplate.applicable_law}\n\n` : ''}TEMPLATE:\n${storedTemplate.content}\n[END TEMPLATE]`;
+      systemPrompt += fillInstruction;
+    }
 
     // Inject conversation summary for context
     if (summary) {
@@ -346,7 +457,10 @@ NEVER wrap the document in markdown code fences (\`\`\`). Output the document di
           })
         });
 
-        if (!res.ok) throw new Error('Claude error');
+        if (!res.ok) {
+          const errText = await res.text();
+          throw new Error('Claude error: ' + res.status + ' — ' + errText.slice(0, 500));
+        }
         const reader = res.body!.getReader();
         const dec = new TextDecoder();
 
@@ -365,8 +479,15 @@ NEVER wrap the document in markdown code fences (\`\`\`). Output the document di
             } catch { /* skip */ }
           }
         }
-      } catch (e) {
-        await writer.write(encoder.encode(`data: ${JSON.stringify({ text: "Document drafting failed. Please try again." })}\n\n`));
+      } catch (e: any) {
+        const msg = e?.message || String(e);
+        console.error('chat-documents stream error:', msg);
+        // Surface billing problems clearly so the operator knows to top up,
+        // but show a clean message to end users for everything else.
+        const userFacing = /credit balance|billing|429|rate.limit/i.test(msg)
+          ? "Document service temporarily unavailable due to a billing issue. The operator has been notified — please try again shortly."
+          : "Document drafting failed. Please try again.";
+        await writer.write(encoder.encode(`data: ${JSON.stringify({ text: userFacing })}\n\n`));
       } finally {
         await writer.write(encoder.encode('data: [DONE]\n\n'));
         await writer.close();
