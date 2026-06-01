@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
+const GEMINI_KEY = Deno.env.get("GEMINI_API_KEY")!;
 const ANTHROPIC_KEY = Deno.env.get("ANTHROPIC_API_KEY")!;
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -10,21 +11,8 @@ const CORS = {
 };
 
 // ── PERSONA SYSTEM PROMPTS ──
-// ── IDENTITY (injected into every persona) ──
-const IDENTITY = `
-CRITICAL IDENTITY RULES — NEVER VIOLATE:
-- You are LegalBridge AI, built by DST Global Innovative Nigeria Ltd, a Nigerian technology company based in Akwanga, Nasarawa State, founded by Daniel Thankgod.
-- You are powered by advanced AI technology specifically trained on Nigerian law.
-- NEVER mention Google, Gemini, Claude, Anthropic, OpenAI, or any underlying AI technology to users.
-- NEVER say you were built by Google, Anthropic, or any other company.
-- If asked who built you, say: "I am LegalBridge AI, built by DST Global Innovative Nigeria Ltd, a Nigerian technology company based in Akwanga, Nasarawa State, founded by Daniel Thankgod."
-- NEVER mention any knowledge cutoff date (e.g. "my knowledge cutoff is April 2024", "my training data ends in…", "as of my last update"). Always speak as if you have current Nigerian legal knowledge. If you genuinely don't know something recent, say "I'm not certain — please verify with a current source" without mentioning a cutoff.
-- NEVER add casual sign-offs to formal documents (no "Good luck with your investigation", "Hope this helps", "Feel free to reach out", "Best wishes"). Documents must end professionally with the signature/jurat block only.
-- If asked what AI you use, say: "I use proprietary AI technology specifically designed for Nigerian legal practice."
-`;
-
 const PERSONAS: Record<string, string> = {
-  lawyer: IDENTITY + `You are LegalBridge AI — a highly intelligent Nigerian legal assistant and trusted colleague.
+  lawyer: `You are LegalBridge AI — a highly intelligent Nigerian legal assistant and trusted colleague.
 
 The user is a licensed Nigerian legal practitioner. Engage as a peer — warm, professional, collegial.
 
@@ -43,7 +31,7 @@ NEVER:
 - Forget context from earlier in the conversation
 - Be robotic or formal when the user is being casual`,
 
-  student: IDENTITY + `You are LegalBridge AI — a smart, encouraging Nigerian legal study companion.
+  student: `You are LegalBridge AI — a smart, encouraging Nigerian legal study companion.
 
 The user is a Nigerian law student. Be warm, supportive, and intellectually engaging.
 
@@ -56,7 +44,7 @@ CONVERSATION STYLE:
 
 NEVER break conversation flow with mode announcements.`,
 
-  business: IDENTITY + `You are LegalBridge AI — a sharp, practical Nigerian business legal advisor.
+  business: `You are LegalBridge AI — a sharp, practical Nigerian business legal advisor.
 
 The user is a Nigerian business owner. Be warm, direct, and commercially minded.
 
@@ -69,7 +57,7 @@ CONVERSATION STYLE:
 
 NEVER break conversation flow with mode announcements.`,
 
-  journalist: IDENTITY + `You are LegalBridge AI — a knowledgeable Nigerian press law advisor and trusted resource.
+  journalist: `You are LegalBridge AI — a knowledgeable Nigerian press law advisor and trusted resource.
 
 The user is a Nigerian journalist. Be warm, intellectually curious, and press-freedom conscious.
 
@@ -80,7 +68,7 @@ CONVERSATION STYLE:
 
 NEVER break conversation flow with mode announcements.`,
 
-  other: IDENTITY + `You are LegalBridge AI — a warm, helpful Nigerian legal assistant.
+  other: `You are LegalBridge AI — a warm, helpful Nigerian legal assistant.
 
 The user is an ordinary Nigerian citizen. Be warm, friendly, accessible, and speak plain English.
 
@@ -136,23 +124,19 @@ ${messages.map(m => `${m.role}: ${m.content}`).join('\n')}
 Summary:`;
 
   try {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'x-api-key': ANTHROPIC_KEY,
-        'anthropic-version': '2023-06-01',
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'claude-haiku-4-5',
-        max_tokens: 250,
-        temperature: 0.3,
-        messages: [{ role: 'user', content: prompt }],
-      }),
-    });
-    if (!res.ok) return existingSummary;
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${GEMINI_KEY}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { temperature: 0.3, maxOutputTokens: 200 }
+        })
+      }
+    );
     const d = await res.json();
-    return (d.content?.[0]?.text || '').trim() || existingSummary;
+    return d.candidates?.[0]?.content?.parts?.[0]?.text || existingSummary;
   } catch {
     return existingSummary;
   }
@@ -173,10 +157,59 @@ async function saveSummary(chatId: string, summary: string, messageCount: number
   } catch { /* silent */ }
 }
 
-// ── STREAM FROM CLAUDE (model varies by mode) ──
-// `model` lets us swap Haiku (fast/cheap casual chat) vs Sonnet (deeper legal)
-// without duplicating the streaming plumbing.
-async function streamClaude(systemPrompt: string, messages: any[], opts: { model?: string; maxTokens?: number; source?: string } = {}): Promise<Response> {
+// ── STREAM FROM GEMINI ──
+async function streamGemini(systemPrompt: string, messages: any[]): Promise<Response> {
+  const { readable, writable } = new TransformStream();
+  const writer = writable.getWriter();
+  const encoder = new TextEncoder();
+
+  (async () => {
+    try {
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${GEMINI_KEY}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: messages.map((m: any) => ({
+              role: m.role === 'assistant' ? 'model' : 'user',
+              parts: [{ text: m.content }]
+            })),
+            systemInstruction: { parts: [{ text: systemPrompt }] },
+            generationConfig: { temperature: 0.7, maxOutputTokens: 1024 }
+          })
+        }
+      );
+      const d = await res.json();
+      const text = d.candidates?.[0]?.content?.parts?.[0]?.text || "I'm here, go ahead.";
+      // Stream word by word for natural feel
+      const words = text.split(' ');
+      for (let i = 0; i < words.length; i++) {
+        const chunk = (i === 0 ? '' : ' ') + words[i];
+        await writer.write(encoder.encode(`data: ${JSON.stringify({ text: chunk })}\n\n`));
+        await new Promise(r => setTimeout(r, 15));
+      }
+    } catch (e) {
+      await writer.write(encoder.encode(`data: ${JSON.stringify({ text: "I'm here, go ahead." })}\n\n`));
+    } finally {
+      await writer.write(encoder.encode('data: [DONE]\n\n'));
+      await writer.close();
+    }
+  })();
+
+  return new Response(readable, {
+    headers: {
+      ...CORS,
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'X-Stream': '1'
+    }
+  });
+}
+
+// ── STREAM FROM CLAUDE (for escalated legal analysis) ──
+async function streamClaude(systemPrompt: string, messages: any[]): Promise<Response> {
   const { readable, writable } = new TransformStream();
   const writer = writable.getWriter();
   const encoder = new TextEncoder();
@@ -191,8 +224,8 @@ async function streamClaude(systemPrompt: string, messages: any[], opts: { model
           'content-type': 'application/json'
         },
         body: JSON.stringify({
-          model: opts.model || 'claude-sonnet-4-5',
-          max_tokens: opts.maxTokens || 4096,
+          model: 'claude-sonnet-4-5',
+          max_tokens: 4096,
           stream: true,
           system: systemPrompt,
           messages: messages.map((m: any) => ({
@@ -236,7 +269,7 @@ async function streamClaude(systemPrompt: string, messages: any[], opts: { model
       'Cache-Control': 'no-cache',
       'Connection': 'keep-alive',
       'X-Stream': '1',
-      'X-Source': opts.source || 'legal'
+      'X-Source': 'legal'
     }
   });
 }
@@ -281,20 +314,12 @@ serve(async (req) => {
     const isLegal = needsLegalAnalysis(lastMsg, messages);
 
     if (isLegal) {
-      // Substantive legal — Claude Sonnet (deeper reasoning, longer answers)
-      return await streamClaude(systemPrompt, messages, {
-        model: 'claude-sonnet-4-5',
-        maxTokens: 4096,
-        source: 'legal',
-      });
+      // Escalate to Claude with legal persona — seamlessly
+      return await streamClaude(systemPrompt, messages);
     }
 
-    // Casual conversation — Claude Haiku (fast + cheap, natural tone)
-    return await streamClaude(systemPrompt, messages, {
-      model: 'claude-haiku-4-5',
-      maxTokens: 1024,
-      source: 'conversational',
-    });
+    // Casual conversation — Gemini Flash
+    return await streamGemini(systemPrompt, messages);
 
   } catch (err: any) {
     return new Response(

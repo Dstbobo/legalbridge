@@ -6,6 +6,7 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
+const GEMINI_KEY = Deno.env.get("GEMINI_API_KEY")!;
 const ANTHROPIC_KEY = Deno.env.get("ANTHROPIC_API_KEY")!;
 
 const CORS = {
@@ -95,7 +96,7 @@ OTHER LEGAL:
 - Statutory Declaration`;
 
 function buildVisionPrompt(userType: string, profile: any): string {
-  const base = `You are LegalBridge Vision AI, built by DST Global Innovative Nigeria Ltd (Akwanga, Nasarawa State), founded by Daniel Thankgod. Never mention Google, Gemini, Claude, Anthropic, or any underlying AI technology. NEVER mention a knowledge cutoff date — speak with current Nigerian legal knowledge. Nigeria's most advanced legal document analysis system.
+  const base = `You are LegalBridge Vision AI — Nigeria's most advanced legal document analysis system.
 
 TASK: Analyse the uploaded document image(s) with the thoroughness of a senior Nigerian legal practitioner.
 
@@ -213,28 +214,96 @@ serve(async (req) => {
     const systemPrompt = buildVisionPrompt(userType, profile)
       + (summary ? `\n\n[CONVERSATION CONTEXT]\n${summary}\n[END CONTEXT]` : '');
 
-    // ── CLAUDE VISION (sole vision provider) ──
-    // Build Claude multimodal content — supports multi-page documents inline.
-    const claudeContent: any[] = [];
+    // Build multimodal parts — support multi-page documents
+    const parts: any[] = [];
     for (let i = 0; i < images.length; i++) {
       if (images.length > 1) {
-        claudeContent.push({ type: 'text', text: `--- PAGE ${i + 1} OF ${images.length} ---` });
+        parts.push({ text: `--- PAGE ${i + 1} OF ${images.length} ---` });
       }
-      claudeContent.push({
-        type: 'image',
-        source: {
-          type: 'base64',
-          media_type: images[i].mimeType || 'image/jpeg',
-          data: images[i].data,
-        },
+      parts.push({
+        inlineData: {
+          mimeType: images[i].mimeType || 'image/jpeg',
+          data: images[i].data
+        }
       });
     }
-    claudeContent.push({
-      type: 'text',
-      text: lastMsg || 'Conduct a full legal analysis of this document under Nigerian law. Identify the document type, extract all text, and assess its legal validity.',
+    parts.push({
+      text: lastMsg || 'Conduct a full legal analysis of this document under Nigerian law. Identify the document type, extract all text, and assess its legal validity.'
     });
 
-    {
+    // ── PRIMARY: Gemini Vision ──
+    try {
+      const ctrl = new AbortController();
+      const timeout = setTimeout(() => ctrl.abort(), 50000); // 50s for multi-page
+
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_KEY}`,
+        {
+          method: 'POST',
+          signal: ctrl.signal,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts }],
+            systemInstruction: { parts: [{ text: systemPrompt }] },
+            generationConfig: { temperature: 0.1, maxOutputTokens: 8192 }
+          })
+        }
+      );
+      clearTimeout(timeout);
+
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error?.message || 'Gemini vision error');
+
+      const text = d.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!text) throw new Error('Empty vision response');
+
+      // Stream word by word
+      const { readable, writable } = new TransformStream();
+      const writer = writable.getWriter();
+      const encoder = new TextEncoder();
+
+      (async () => {
+        try {
+          const words = text.split(' ');
+          for (let i = 0; i < words.length; i++) {
+            await writer.write(encoder.encode(`data: ${JSON.stringify({ text: (i === 0 ? '' : ' ') + words[i] })}\n\n`));
+            await new Promise(r => setTimeout(r, 8));
+          }
+        } finally {
+          await writer.write(encoder.encode('data: [DONE]\n\n'));
+          await writer.close();
+        }
+      })();
+
+      return new Response(readable, {
+        headers: {
+          ...CORS,
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+          'X-Stream': '1',
+          'X-Source': 'vision'
+        }
+      });
+
+    } catch (_geminiErr) {
+      // ── FALLBACK: Claude Vision ──
+      // Convert images to Claude format
+      const claudeContent: any[] = [];
+      for (const img of images) {
+        claudeContent.push({
+          type: 'image',
+          source: {
+            type: 'base64',
+            media_type: img.mimeType || 'image/jpeg',
+            data: img.data
+          }
+        });
+      }
+      claudeContent.push({
+        type: 'text',
+        text: lastMsg || 'Conduct a full legal analysis of this document under Nigerian law.'
+      });
 
       const { readable, writable } = new TransformStream();
       const writer = writable.getWriter();
@@ -292,7 +361,7 @@ serve(async (req) => {
           'Cache-Control': 'no-cache',
           'Connection': 'keep-alive',
           'X-Stream': '1',
-          'X-Source': 'vision'
+          'X-Source': 'vision-fallback'
         }
       });
     }

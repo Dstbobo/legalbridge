@@ -1,6 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
-// GEMINI removed — vision now flows through Claude Sonnet streaming below.
+const GEMINI_KEY = Deno.env.get("GEMINI_API_KEY")!;
 const ANTHROPIC_KEY = Deno.env.get("ANTHROPIC_API_KEY")!;
 const VOYAGE_KEY = Deno.env.get("VOYAGE_API_KEY")!;
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
@@ -162,7 +162,7 @@ async function searchEvidenceLaw(query: string): Promise<string> {
 
 // ── BUILD EVIDENCE ANALYSIS PROMPT ──
 function buildEvidencePrompt(userType: string, analysisType: string): string {
-  const base = `You are LegalBridge Evidence AI, built by DST Global Innovative Nigeria Ltd (Akwanga, Nasarawa State), founded by Daniel Thankgod. Never mention Google, Gemini, Claude, Anthropic, or any underlying AI technology. NEVER mention a knowledge cutoff date — speak with current Nigerian legal knowledge. Nigeria's most advanced legal evidence analysis system.
+  const base = `You are LegalBridge Evidence AI — Nigeria's most advanced legal evidence analysis system.
 
 JURISDICTION: Nigerian law exclusively.
 PRIMARY LAW: Evidence Act 2011; ACJA 2015; Criminal Code; Penal Code; Constitution of Nigeria 1999.
@@ -289,76 +289,53 @@ serve(async (req) => {
 
     systemPrompt += ragCtx;
 
-    // If images provided — use Claude Vision streaming for evidence analysis
+    // If images provided — use vision + evidence analysis
     if (images && images.length > 0) {
-      const claudeContent: any[] = [];
+      // Build multimodal request for Gemini Vision
+      const parts: any[] = [];
       for (let i = 0; i < images.length; i++) {
-        if (images.length > 1) claudeContent.push({ type: 'text', text: `--- EXHIBIT ${i + 1} ---` });
-        claudeContent.push({
-          type: 'image',
-          source: {
-            type: 'base64',
-            media_type: images[i].mimeType || 'image/jpeg',
-            data: images[i].data,
-          },
-        });
+        if (images.length > 1) parts.push({ text: `--- EXHIBIT ${i + 1} ---` });
+        parts.push({ inlineData: { mimeType: images[i].mimeType || 'image/jpeg', data: images[i].data } });
       }
-      claudeContent.push({
-        type: 'text',
-        text: lastMsg || 'Conduct a full evidence analysis of this exhibit under Nigerian law.',
-      });
+      parts.push({ text: lastMsg || 'Conduct a full evidence analysis of this exhibit under Nigerian law.' });
 
-      const { readable, writable } = new TransformStream();
-      const writer = writable.getWriter();
-      const encoder = new TextEncoder();
-      (async () => {
-        try {
-          const res = await fetch('https://api.anthropic.com/v1/messages', {
+      try {
+        const res = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${GEMINI_KEY}`,
+          {
             method: 'POST',
-            headers: {
-              'x-api-key': ANTHROPIC_KEY,
-              'anthropic-version': '2023-06-01',
-              'content-type': 'application/json',
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              model: 'claude-sonnet-4-5',
-              max_tokens: 6000,
-              stream: true,
-              system: systemPrompt,
-              messages: [{ role: 'user', content: claudeContent }],
-            }),
-          });
-          if (!res.ok) throw new Error('Claude evidence vision error');
-          const reader = res.body!.getReader();
-          const dec = new TextDecoder();
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            const chunk = dec.decode(value);
-            const lines = chunk.split('\n').filter((l) => l.startsWith('data: '));
-            for (const line of lines) {
-              const data = line.slice(6);
-              if (data === '[DONE]') continue;
-              try {
-                const j = JSON.parse(data);
-                const text = j.delta?.text || '';
-                if (text) await writer.write(encoder.encode(`data: ${JSON.stringify({ text })}\n\n`));
-              } catch { /* skip */ }
-            }
+              contents: [{ parts }],
+              systemInstruction: { parts: [{ text: systemPrompt }] },
+              generationConfig: { temperature: 0.1, maxOutputTokens: 8192 }
+            })
           }
-        } catch (e: any) {
-          const msg = e?.message || String(e);
-          console.error('chat-evidence vision error:', msg);
-          await writer.write(encoder.encode(`data: ${JSON.stringify({ text: 'Evidence analysis failed. Please try again.' })}\n\n`));
-        } finally {
-          await writer.write(encoder.encode('data: [DONE]\n\n'));
-          await writer.close();
-        }
-      })();
+        );
+        const d = await res.json();
+        const text = d.candidates?.[0]?.content?.parts?.[0]?.text || 'Unable to analyse exhibit.';
 
-      return new Response(readable, {
-        headers: { ...CORS, 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'X-Stream': '1', 'X-Source': 'evidence' },
-      });
+        // Stream the response
+        const { readable, writable } = new TransformStream();
+        const writer = writable.getWriter();
+        const encoder = new TextEncoder();
+        (async () => {
+          try {
+            const words = text.split(' ');
+            for (let i = 0; i < words.length; i++) {
+              await writer.write(encoder.encode(`data: ${JSON.stringify({ text: (i === 0 ? '' : ' ') + words[i] })}\n\n`));
+              await new Promise(r => setTimeout(r, 8));
+            }
+          } finally {
+            await writer.write(encoder.encode('data: [DONE]\n\n'));
+            await writer.close();
+          }
+        })();
+
+        return new Response(readable, {
+          headers: { ...CORS, 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'X-Stream': '1', 'X-Source': 'evidence' }
+        });
+      } catch (e) { /* fall through to text-only analysis */ }
     }
 
     // Text-only evidence analysis — Claude Sonnet streaming

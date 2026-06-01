@@ -3,7 +3,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const SUPABASE_ANON = Deno.env.get("SUPABASE_ANON_KEY")!;
-const ANTHROPIC_KEY = Deno.env.get("ANTHROPIC_API_KEY")!;
+const GEMINI_KEY = Deno.env.get("GEMINI_API_KEY")!;
 
 // ── FUNCTION URLS (internal Supabase calls) ──
 const FUNCTIONS = {
@@ -18,13 +18,12 @@ const FUNCTIONS = {
 const CORS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-  "Access-Control-Expose-Headers": "X-Stream, X-Intent, Content-Type",
 };
 
 // ══════════════════════════════════════════════════════
 // INTENT DETECTION — routes to correct function
 // ══════════════════════════════════════════════════════
-function detectIntent(message: string, hasImages: boolean, history: any[] = []): string {
+function detectIntent(message: string, hasImages: boolean): string {
   if (hasImages) {
     // Images with evidence keywords → chat-evidence
     if (/\b(evidence|exhibit|admissib|court|chain of custody|forgery|authentic|fingerprint|forensic|prove|proof)\b/i.test(message)) {
@@ -36,44 +35,7 @@ function detectIntent(message: string, hasImages: boolean, history: any[] = []):
 
   const m = message.toLowerCase().trim();
 
-  // ── CONTEXT-AWARE DOCUMENT CONTINUATION ──
-  // If the last assistant message asked for document details (NEED_DETAILS
-  // marker, or "please provide" + numbered list), and the user is now replying
-  // with those details, continue routing to the documents function so the
-  // actual draft is produced.
-  const lastAssistant = [...history].reverse().find((h: any) => h.role === 'assistant');
-  if (lastAssistant) {
-    const a = (lastAssistant.content || '').slice(0, 1200);
-    const askedForDetails =
-      /NEED_DETAILS\s*:/i.test(a) ||
-      (/\bI can draft\b.*\b(please provide|need .* details)/is.test(a)) ||
-      (/^\s*\d+\.\s+/m.test(a) && /\b(landlord|tenant|deponent|petitioner|respondent|address|amount|rent|name|full name|date|signature)\b/i.test(a));
-    if (askedForDetails && m.length > 5) {
-      // Treat the user's response as the document details payload
-      return 'documents';
-    }
-  }
-
-  // ── DOCUMENT DRAFTING — checked FIRST and FAR more permissive ──
-  // Any combination of a drafting verb / phrase + a document noun routes to chat-documents.
-  // This intentionally overrides legal/search routing because the user has explicitly
-  // asked for a document to be produced.
-  const draftVerbs = /\b(draft|prepare|write|generate|create|produce|make|compose|do up|file|fill|build|put together|help me (draft|prepare|write|generate|create|file|produce|make|put together)|can you (draft|prepare|write|generate|create|produce|make)|could you (draft|prepare|write|generate|create|produce|make)|please (draft|prepare|write|generate|create|produce|make)|i need (a|an|to file)|i want (a|an|to file)|i'?d like (a|an)|need help (drafting|preparing|writing|with))\b/i;
-  const docNouns = /\b(affidavit|agreement|contract|deed|petition|motion|writ|notice|memo(randum)?|letter|tenancy|lease|employment|offer\s+letter|divorce|petition\s+for\s+dissolution|power\s+of\s+attorney|MOU|NDA|non.?disclosure|consultancy|partnership|shareholders?|service\s+agreement|will|codicil|undertaking|guarantee|indemnity|loan\s+agreement|promissory\s+note|policy|terms\s+of\s+(use|service)|privacy\s+policy|cease\s+and\s+desist|demand\s+letter|FOI(\s+request)?|freedom\s+of\s+information|quit\s+notice|application|resolution|complaint|cover\s+letter|termination|warning|press\s+accreditation|response\s+letter|petition\s+letter|letter\s+of\s+demand|engagement\s+letter|bail\s+application|statement\s+of\s+claim|statement\s+of\s+defen[cs]e|originating\s+summons|trademark\s+assignment|brief|deposition|charge\s+sheet)\b/i;
-  if (draftVerbs.test(m) && docNouns.test(m)) {
-    return 'documents';
-  }
-  // Additional documents check: even WITHOUT a draft verb, certain phrasings clearly
-  // signal a drafting request (e.g. "FOI request to NCC about ...", "tenancy agreement
-  // between Mr X and Mrs Y").
-  if (
-    /\b(FOI\s+request\s+to|application\s+for\s+bail|notice\s+to\s+quit\b|letter\s+of\s+demand\b)\b/i.test(m) ||
-    (/\b(agreement|contract|deed)\b\s+(?:between|for|with)\s+[A-Z]/i.test(message))
-  ) {
-    return 'documents';
-  }
-
-  // ── LIVE SEARCH (only when user is asking ABOUT recent things, not drafting) ──
+  // ── LIVE SEARCH (must check before legal) ──
   if (/\b(latest|recent|current|today|new law|new act|just passed|2024|2025|2026|amendment|breaking|news|update|gazette|just enacted|recently signed)\b/i.test(m)) {
     return 'search';
   }
@@ -83,6 +45,11 @@ function detectIntent(message: string, hasImages: boolean, history: any[] = []):
     return 'evidence';
   }
 
+  // ── DOCUMENT DRAFTING ──
+  if (/\b(draft|prepare|write|generate)\b.{0,30}\b(affidavit|agreement|contract|deed|petition|motion|writ|notice|memo|memorandum|letter of demand|tenancy agreement|employment contract|divorce petition|power of attorney|resolution|MOU)\b/i.test(m)) {
+    return 'documents';
+  }
+
   // ── LEGAL ANALYSIS (substantive legal questions) ──
   if (
     /\b(advise|advice|analyse|analyze|legal opinion|legal analysis|legal position|what does the law|what is the law|under the law|legally speaking|legal implication|legal consequence)\b/i.test(m) ||
@@ -90,7 +57,7 @@ function detectIntent(message: string, hasImages: boolean, history: any[] = []):
     /\b(legal strategy|litigation strategy|court strategy|how to win|grounds for|cause of action)\b/i.test(m) ||
     /\b(sue|file a case|go to court|take to court|institute proceedings|commence action|fundamental rights)\b/i.test(m) ||
     /\b(is it legal|is that legal|is this legal|is it illegal|legally allowed|lawful|unlawful|criminal liability|civil liability)\b/i.test(m) ||
-    /\b(remand|charge and bail|confessional statement|arraignment|plea)\b/i.test(m) ||
+    /\b(bail application|remand|charge and bail|confessional statement|arraignment|plea)\b/i.test(m) ||
     /\b(landlord|tenant|eviction|quit notice|recovery of premises|mesne profit)\b/i.test(m) ||
     /\b(divorce|adultery|custody|matrimonial|nullity|decree|maintenance|spousal)\b/i.test(m) ||
     /\b(employment|wrongful dismissal|unfair termination|nicn|labour court|minimum wage)\b/i.test(m) ||
@@ -186,23 +153,19 @@ async function generateAndSaveSummary(
       ? `Update this summary with new messages. Max 150 words. Focus on: who the user is, topics discussed, decisions made, what they need.\n\nExisting: ${existingSummary}\n\nNew messages:\n${messages.slice(-10).map((m: any) => `${m.role}: ${m.content}`).join('\n')}\n\nUpdated summary:`
       : `Summarize in max 150 words. Focus on: who the user is, topics discussed, what they need.\n\n${messages.map((m: any) => `${m.role}: ${m.content}`).join('\n')}\n\nSummary:`;
 
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'x-api-key': ANTHROPIC_KEY,
-        'anthropic-version': '2023-06-01',
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'claude-haiku-4-5',
-        max_tokens: 250,
-        temperature: 0.3,
-        messages: [{ role: 'user', content: prompt }],
-      }),
-    });
-    if (!res.ok) return;
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${GEMINI_KEY}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { temperature: 0.3, maxOutputTokens: 200 }
+        })
+      }
+    );
     const d = await res.json();
-    const newSummary = (d.content?.[0]?.text || '').trim() || existingSummary;
+    const newSummary = d.candidates?.[0]?.content?.parts?.[0]?.text || existingSummary;
 
     // Save to Supabase
     await fetch(`${SUPABASE_URL}/rest/v1/chats?id=eq.${chatId}`, {
@@ -272,7 +235,7 @@ serve(async (req) => {
 
     // ── DETECT INTENT ──
     const hasImages = images && images.length > 0;
-    const intent = detectIntent(message, hasImages, history);
+    const intent = detectIntent(message, hasImages);
 
     // Message persistence is handled by the frontend's saveTurn.
     // Router only updates message_count so auto-summarize thresholds stay accurate.
