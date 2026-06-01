@@ -1,0 +1,26 @@
+# LegalBridge API — Railway service config
+#
+# How to deploy:
+#   1. Create a new Railway service in the LegalBridge project.
+#   2. Connect this GitHub repo and set the service Root Directory to /api.
+#   3. Railway will detect the Dockerfile and build from it.
+#   4. Set the environment variables listed in .env.example under
+#      Settings → Variables.
+#   5. Add a custom domain api.legalbridge.ng under Settings → Networking.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# Railway reads $PORT at runtime and forwards it to the container.
+startCommand = "sh -c \"uvicorn app.main:app --host 0.0.0.0 --port ${PORT} --log-level ${LOG_LEVEL:-info}\""
+
+# Use the lightweight liveness endpoint as the platform healthcheck so the
+# instance does not flap during transient DB blips.
+healthcheckPath = "/health/live"
+healthcheckTimeout = 10
+
+# Retry deploys briefly on failure, then alert.
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5

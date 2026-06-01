@@ -1,0 +1,29 @@
+# LegalBridge API — Python ignores
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# Local secrets — only .env.example is committed
+.env
+.env.local
+.env.*.local
+
+# Test/IDE
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.idea/
+.vscode/
+
+# Build artefacts
+*.log
+dist/
+build/

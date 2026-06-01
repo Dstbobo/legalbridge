@@ -1,0 +1,23 @@
+# LegalBridge FastAPI backend — pinned dependencies
+# Python 3.12 target
+
+# Web framework
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+
+# Settings / validation
+pydantic==2.10.4
+pydantic-settings==2.7.1
+
+# Database — async PostgreSQL via SQLAlchemy 2.0
+sqlalchemy[asyncio]==2.0.36
+asyncpg==0.30.0
+
+# JWT verification for Supabase auth tokens
+PyJWT==2.10.1
+
+# HTTP client (used later for Supabase REST calls if/when needed)
+httpx==0.28.1
+
+# Optional but useful at this phase
+python-multipart==0.0.20
