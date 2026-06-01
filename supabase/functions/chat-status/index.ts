@@ -1,15 +1,15 @@
 // SUPABASE FUNCTION: chat-status
 // JWT verification: OFF
 // Purpose: Ultra-fast lightweight status message generation.
-//          The status string ALWAYS comes from the AI reading the actual
-//          user message — there are NO hardcoded status strings anywhere.
+//          Uses Claude Haiku — the fastest and cheapest Claude model — so the
+//          whole platform runs on a single Anthropic dependency.
 //          On failure it returns an empty status so the UI simply keeps
-//          showing its animated dots (never a generic fallback message).
+//          showing its animated dots (never a hardcoded fallback message).
 // Returns: JSON { status: "short natural message" }
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
-const GEMINI_KEY = Deno.env.get("GEMINI_API_KEY")!;
+const ANTHROPIC_KEY = Deno.env.get("ANTHROPIC_API_KEY")!;
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -27,13 +27,7 @@ serve(async (req) => {
     };
     const role = roleLabel[userType] || 'a user';
 
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${GEMINI_KEY}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: `You are LegalBridge, a Nigerian legal AI assistant. The user (${role}) just sent you a message. Before you answer, you say ONE very short line telling them what you are about to do — like a person briefly saying what they're doing right now.
+    const prompt = `You are LegalBridge, a Nigerian legal AI assistant. The user (${role}) just sent you a message. Before you answer, you say ONE very short line telling them what you are about to do — like a person briefly saying what they're doing right now.
 
 User's message: "${message.slice(0, 250)}"
 
@@ -53,17 +47,29 @@ Message: "My landlord locked me out" -> Checking your rights as a tenant...
 Message: "Thanks so much" -> You're welcome...
 Message: "Help me register my business with CAC" -> Pulling up the CAC steps...
 
-Now write the status line for the user's message:` }] }],
-          // thinkingBudget: 0 disables the model's internal reasoning so the
-          // tiny token budget goes entirely to the visible status line (fast + cheap).
-          generationConfig: { temperature: 0.4, maxOutputTokens: 24, thinkingConfig: { thinkingBudget: 0 } }
-        })
-      }
-    );
+Now write the status line for the user's message. Reply with ONLY the status line, nothing else.`;
+
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': ANTHROPIC_KEY,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5',
+        max_tokens: 24,
+        temperature: 0.4,
+        messages: [{ role: 'user', content: prompt }],
+      }),
+    });
+
+    if (!res.ok) {
+      return new Response(JSON.stringify({ status: '' }), { headers: { ...CORS, 'Content-Type': 'application/json' } });
+    }
 
     const d = await res.json();
-    let status = d.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
-    // Strip any surrounding quotes the model may add; reject anything too long.
+    let status = (d.content?.[0]?.text || '').trim();
     status = status.replace(/^["'`]+|["'`]+$/g, '').trim();
     if (status.length > 60) status = '';
 
@@ -73,7 +79,6 @@ Now write the status line for the user's message:` }] }],
     );
 
   } catch {
-    // No hardcoded message — empty status keeps the UI on its animated dots.
     return new Response(
       JSON.stringify({ status: '' }),
       { headers: { ...CORS, 'Content-Type': 'application/json' } }

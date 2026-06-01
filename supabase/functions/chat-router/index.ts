@@ -3,7 +3,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const SUPABASE_ANON = Deno.env.get("SUPABASE_ANON_KEY")!;
-const GEMINI_KEY = Deno.env.get("GEMINI_API_KEY")!;
+const ANTHROPIC_KEY = Deno.env.get("ANTHROPIC_API_KEY")!;
 
 // ── FUNCTION URLS (internal Supabase calls) ──
 const FUNCTIONS = {
@@ -186,19 +186,23 @@ async function generateAndSaveSummary(
       ? `Update this summary with new messages. Max 150 words. Focus on: who the user is, topics discussed, decisions made, what they need.\n\nExisting: ${existingSummary}\n\nNew messages:\n${messages.slice(-10).map((m: any) => `${m.role}: ${m.content}`).join('\n')}\n\nUpdated summary:`
       : `Summarize in max 150 words. Focus on: who the user is, topics discussed, what they need.\n\n${messages.map((m: any) => `${m.role}: ${m.content}`).join('\n')}\n\nSummary:`;
 
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${GEMINI_KEY}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.3, maxOutputTokens: 200 }
-        })
-      }
-    );
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': ANTHROPIC_KEY,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5',
+        max_tokens: 250,
+        temperature: 0.3,
+        messages: [{ role: 'user', content: prompt }],
+      }),
+    });
+    if (!res.ok) return;
     const d = await res.json();
-    const newSummary = d.candidates?.[0]?.content?.parts?.[0]?.text || existingSummary;
+    const newSummary = (d.content?.[0]?.text || '').trim() || existingSummary;
 
     // Save to Supabase
     await fetch(`${SUPABASE_URL}/rest/v1/chats?id=eq.${chatId}`, {

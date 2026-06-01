@@ -2166,9 +2166,9 @@ const STARTER_CARDS = {
 function getStarterCards() {
   const type = userProfile?.user_type || 'other';
   const pool = STARTER_CARDS[type] || STARTER_CARDS.other;
-  // Shuffle and pick 3
+  // Shuffle and pick 4 — every role's pool has at least 4 entries
   const shuffled = [...pool].sort(() => Math.random() - 0.5);
-  return shuffled.slice(0, 3);
+  return shuffled.slice(0, 4);
 }
 
 function populateStarterCards() {

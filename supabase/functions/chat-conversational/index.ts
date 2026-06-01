@@ -1,6 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
-const GEMINI_KEY = Deno.env.get("GEMINI_API_KEY")!;
 const ANTHROPIC_KEY = Deno.env.get("ANTHROPIC_API_KEY")!;
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -137,19 +136,23 @@ ${messages.map(m => `${m.role}: ${m.content}`).join('\n')}
 Summary:`;
 
   try {
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${GEMINI_KEY}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.3, maxOutputTokens: 200 }
-        })
-      }
-    );
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': ANTHROPIC_KEY,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5',
+        max_tokens: 250,
+        temperature: 0.3,
+        messages: [{ role: 'user', content: prompt }],
+      }),
+    });
+    if (!res.ok) return existingSummary;
     const d = await res.json();
-    return d.candidates?.[0]?.content?.parts?.[0]?.text || existingSummary;
+    return (d.content?.[0]?.text || '').trim() || existingSummary;
   } catch {
     return existingSummary;
   }
@@ -170,59 +173,10 @@ async function saveSummary(chatId: string, summary: string, messageCount: number
   } catch { /* silent */ }
 }
 
-// ── STREAM FROM GEMINI ──
-async function streamGemini(systemPrompt: string, messages: any[]): Promise<Response> {
-  const { readable, writable } = new TransformStream();
-  const writer = writable.getWriter();
-  const encoder = new TextEncoder();
-
-  (async () => {
-    try {
-      const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${GEMINI_KEY}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: messages.map((m: any) => ({
-              role: m.role === 'assistant' ? 'model' : 'user',
-              parts: [{ text: m.content }]
-            })),
-            systemInstruction: { parts: [{ text: systemPrompt }] },
-            generationConfig: { temperature: 0.7, maxOutputTokens: 1024 }
-          })
-        }
-      );
-      const d = await res.json();
-      const text = d.candidates?.[0]?.content?.parts?.[0]?.text || "I'm here, go ahead.";
-      // Stream word by word for natural feel
-      const words = text.split(' ');
-      for (let i = 0; i < words.length; i++) {
-        const chunk = (i === 0 ? '' : ' ') + words[i];
-        await writer.write(encoder.encode(`data: ${JSON.stringify({ text: chunk })}\n\n`));
-        await new Promise(r => setTimeout(r, 15));
-      }
-    } catch (e) {
-      await writer.write(encoder.encode(`data: ${JSON.stringify({ text: "I'm here, go ahead." })}\n\n`));
-    } finally {
-      await writer.write(encoder.encode('data: [DONE]\n\n'));
-      await writer.close();
-    }
-  })();
-
-  return new Response(readable, {
-    headers: {
-      ...CORS,
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-      'X-Stream': '1'
-    }
-  });
-}
-
-// ── STREAM FROM CLAUDE (for escalated legal analysis) ──
-async function streamClaude(systemPrompt: string, messages: any[]): Promise<Response> {
+// ── STREAM FROM CLAUDE (model varies by mode) ──
+// `model` lets us swap Haiku (fast/cheap casual chat) vs Sonnet (deeper legal)
+// without duplicating the streaming plumbing.
+async function streamClaude(systemPrompt: string, messages: any[], opts: { model?: string; maxTokens?: number; source?: string } = {}): Promise<Response> {
   const { readable, writable } = new TransformStream();
   const writer = writable.getWriter();
   const encoder = new TextEncoder();
@@ -237,8 +191,8 @@ async function streamClaude(systemPrompt: string, messages: any[]): Promise<Resp
           'content-type': 'application/json'
         },
         body: JSON.stringify({
-          model: 'claude-sonnet-4-5',
-          max_tokens: 4096,
+          model: opts.model || 'claude-sonnet-4-5',
+          max_tokens: opts.maxTokens || 4096,
           stream: true,
           system: systemPrompt,
           messages: messages.map((m: any) => ({
@@ -282,7 +236,7 @@ async function streamClaude(systemPrompt: string, messages: any[]): Promise<Resp
       'Cache-Control': 'no-cache',
       'Connection': 'keep-alive',
       'X-Stream': '1',
-      'X-Source': 'legal'
+      'X-Source': opts.source || 'legal'
     }
   });
 }
@@ -327,12 +281,20 @@ serve(async (req) => {
     const isLegal = needsLegalAnalysis(lastMsg, messages);
 
     if (isLegal) {
-      // Escalate to Claude with legal persona — seamlessly
-      return await streamClaude(systemPrompt, messages);
+      // Substantive legal — Claude Sonnet (deeper reasoning, longer answers)
+      return await streamClaude(systemPrompt, messages, {
+        model: 'claude-sonnet-4-5',
+        maxTokens: 4096,
+        source: 'legal',
+      });
     }
 
-    // Casual conversation — Gemini Flash
-    return await streamGemini(systemPrompt, messages);
+    // Casual conversation — Claude Haiku (fast + cheap, natural tone)
+    return await streamClaude(systemPrompt, messages, {
+      model: 'claude-haiku-4-5',
+      maxTokens: 1024,
+      source: 'conversational',
+    });
 
   } catch (err: any) {
     return new Response(

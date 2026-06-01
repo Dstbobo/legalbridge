@@ -1,11 +1,10 @@
 // SUPABASE FUNCTION: chat-search
 // JWT verification: OFF
-// Purpose: Live web search via Gemini Flash + Google Search grounding
+// Purpose: Live web search via Claude Sonnet + Anthropic's web_search tool
 // Returns: SSE stream with response text and clickable source links
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
-const GEMINI_KEY = Deno.env.get("GEMINI_API_KEY")!;
 const ANTHROPIC_KEY = Deno.env.get("ANTHROPIC_API_KEY")!;
 
 const CORS = {
@@ -13,10 +12,10 @@ const CORS = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-function buildSearchPrompt(userType: string, profile: any): string {
+function buildSearchPrompt(userType: string, _profile: any): string {
   const base = `You are LegalBridge AI, built by DST Global Innovative Nigeria Ltd (Akwanga, Nasarawa State), founded by Daniel Thankgod. Never mention Google, Gemini, Claude, Anthropic, or any underlying AI technology to users. NEVER mention any knowledge cutoff date — speak with current Nigerian legal knowledge. You are a Nigerian legal news and current affairs assistant.
 
-TASK: Answer questions about recent Nigerian legal developments, new legislation, amendments, court judgments, and regulatory updates.
+TASK: Answer questions about recent Nigerian legal developments, new legislation, amendments, court judgments, and regulatory updates. Use the web_search tool to fetch the latest verified information.
 
 SEARCH PRIORITIES (in order):
 1. Official Federal Gazette (officialgazette.gov.ng)
@@ -29,11 +28,12 @@ SEARCH PRIORITIES (in order):
 8. Reputable Nigerian legal news sources
 
 RESPONSE FORMAT:
-- Lead with the key legal development or answer
-- Cite sources by name and date where available
-- Note when a law was signed, gazette date, or effective date
-- Flag if information is unverified or from unofficial sources
-- Keep response focused and factual
+- Lead with the key legal development or answer.
+- Cite sources by name and date in the body where helpful.
+- Note when a law was signed, the gazette date, or effective date.
+- Flag if information is unverified or from unofficial sources.
+- Keep response focused and factual.
+- At the end, include a "Sources" section listing the URLs you relied on as clickable HTML links.
 
 JURISDICTION: Nigeria exclusively.`;
 
@@ -64,150 +64,91 @@ serve(async (req) => {
       summary = '',
     } = body;
 
-    const lastMsg = messages[messages.length - 1]?.content || '';
     const systemPrompt = buildSearchPrompt(userType, profile)
       + (profile?.state ? `\nUser's state: ${profile.state}.` : '')
       + (summary ? `\n\n[CONVERSATION CONTEXT]\n${summary}\n[END CONTEXT]` : '');
 
-    // ── GEMINI WITH GOOGLE SEARCH GROUNDING ──
-    try {
-      const ctrl = new AbortController();
-      const timeout = setTimeout(() => ctrl.abort(), 25000);
+    const { readable, writable } = new TransformStream();
+    const writer = writable.getWriter();
+    const encoder = new TextEncoder();
 
-      const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_KEY}`,
-        {
+    (async () => {
+      try {
+        const res = await fetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
-          signal: ctrl.signal,
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'x-api-key': ANTHROPIC_KEY,
+            'anthropic-version': '2023-06-01',
+            'content-type': 'application/json',
+          },
           body: JSON.stringify({
-            contents: messages.map((m: any) => ({
-              role: m.role === 'assistant' ? 'model' : 'user',
-              parts: [{ text: m.content }]
+            model: 'claude-sonnet-4-5',
+            max_tokens: 3000,
+            stream: true,
+            system: systemPrompt,
+            tools: [
+              {
+                type: 'web_search_20250305',
+                name: 'web_search',
+                max_uses: 5,
+              },
+            ],
+            messages: messages.map((m: any) => ({
+              role: m.role === 'assistant' ? 'assistant' : 'user',
+              content: m.content,
             })),
-            systemInstruction: { parts: [{ text: systemPrompt }] },
-            tools: [{ googleSearch: {} }],
-            generationConfig: { temperature: 0.3, maxOutputTokens: 4096 }
-          })
+          }),
+        });
+
+        if (!res.ok) {
+          const errText = await res.text();
+          throw new Error('Claude web search error: ' + res.status + ' — ' + errText.slice(0, 300));
         }
-      );
-      clearTimeout(timeout);
 
-      const d = await res.json();
-      if (!res.ok) throw new Error(d.error?.message || 'Gemini search error');
+        const reader = res.body!.getReader();
+        const dec = new TextDecoder();
 
-      let responseText = d.candidates?.[0]?.content?.parts?.[0]?.text || '';
-      if (!responseText) throw new Error('Empty search response');
-
-      // Append clickable source links
-      const chunks = d.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
-      const links = chunks
-        .filter((c: any) => c?.web?.uri && !c.web.uri.includes('vertexaisearch'))
-        .slice(0, 5)
-        .map((c: any) => `<li><a href="${c.web.uri}" target="_blank" style="color:#4a8ef5">${c.web.title || c.web.uri}</a></li>`)
-        .join('');
-
-      if (links) {
-        responseText += `\n\n<div style="margin-top:14px;padding:12px;background:rgba(74,142,245,0.08);border-radius:8px;border-left:3px solid #4a8ef5"><strong>📰 Sources:</strong><ul style="margin-top:6px;padding-left:16px">${links}</ul></div>`;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const chunk = dec.decode(value);
+          const lines = chunk.split('\n').filter((l) => l.startsWith('data: '));
+          for (const line of lines) {
+            const data = line.slice(6);
+            if (data === '[DONE]') continue;
+            try {
+              const j = JSON.parse(data);
+              // Anthropic streaming events: content_block_delta with text_delta
+              const text = j.delta?.text || j.delta?.partial_json || '';
+              if (text && j.delta?.type !== 'input_json_delta') {
+                await writer.write(encoder.encode(`data: ${JSON.stringify({ text })}\n\n`));
+              }
+            } catch { /* skip */ }
+          }
+        }
+      } catch (e: any) {
+        const msg = e?.message || String(e);
+        console.error('chat-search stream error:', msg);
+        const userFacing = /credit balance|billing|429|rate.limit/i.test(msg)
+          ? '⚠ Search service temporarily unavailable due to a billing issue. The operator has been notified.'
+          : '⚠ Search is temporarily unavailable. Please try again.';
+        await writer.write(encoder.encode(`data: ${JSON.stringify({ text: userFacing })}\n\n`));
+      } finally {
+        await writer.write(encoder.encode('data: [DONE]\n\n'));
+        await writer.close();
       }
+    })();
 
-      // Stream the response word by word
-      const { readable, writable } = new TransformStream();
-      const writer = writable.getWriter();
-      const encoder = new TextEncoder();
-
-      (async () => {
-        try {
-          const words = responseText.split(' ');
-          for (let i = 0; i < words.length; i++) {
-            const chunk = (i === 0 ? '' : ' ') + words[i];
-            await writer.write(encoder.encode(`data: ${JSON.stringify({ text: chunk })}\n\n`));
-            await new Promise(r => setTimeout(r, 12));
-          }
-        } catch {
-          await writer.write(encoder.encode(`data: ${JSON.stringify({ text: '\n\n⚠ Search stream interrupted.' })}\n\n`));
-        } finally {
-          await writer.write(encoder.encode('data: [DONE]\n\n'));
-          await writer.close();
-        }
-      })();
-
-      return new Response(readable, {
-        headers: {
-          ...CORS,
-          'Content-Type': 'text/event-stream',
-          'Cache-Control': 'no-cache',
-          'Connection': 'keep-alive',
-          'X-Stream': '1',
-          'X-Source': 'search'
-        }
-      });
-
-    } catch (geminiErr) {
-      // ── FALLBACK: Claude Sonnet without live search ──
-      const { readable, writable } = new TransformStream();
-      const writer = writable.getWriter();
-      const encoder = new TextEncoder();
-
-      (async () => {
-        try {
-          const res = await fetch('https://api.anthropic.com/v1/messages', {
-            method: 'POST',
-            headers: {
-              'x-api-key': ANTHROPIC_KEY,
-              'anthropic-version': '2023-06-01',
-              'content-type': 'application/json'
-            },
-            body: JSON.stringify({
-              model: 'claude-sonnet-4-5',
-              max_tokens: 2048,
-              stream: true,
-              system: systemPrompt + '\n\nNOTE: Live search is unavailable. Answer from your training knowledge and clearly state the knowledge cutoff date. Recommend the user check official sources for the latest updates.',
-              messages: messages.map((m: any) => ({
-                role: m.role === 'assistant' ? 'assistant' : 'user',
-                content: m.content
-              }))
-            })
-          });
-
-          if (!res.ok) throw new Error('Claude fallback error');
-          const reader = res.body!.getReader();
-          const dec = new TextDecoder();
-
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            const chunk = dec.decode(value);
-            const lines = chunk.split('\n').filter(l => l.startsWith('data: '));
-            for (const line of lines) {
-              const data = line.slice(6);
-              if (data === '[DONE]') continue;
-              try {
-                const j = JSON.parse(data);
-                const text = j.delta?.text || '';
-                if (text) await writer.write(encoder.encode(`data: ${JSON.stringify({ text })}\n\n`));
-              } catch { /* skip */ }
-            }
-          }
-        } catch {
-          await writer.write(encoder.encode(`data: ${JSON.stringify({ text: '⚠ Search is temporarily unavailable. Please try again.' })}\n\n`));
-        } finally {
-          await writer.write(encoder.encode('data: [DONE]\n\n'));
-          await writer.close();
-        }
-      })();
-
-      return new Response(readable, {
-        headers: {
-          ...CORS,
-          'Content-Type': 'text/event-stream',
-          'Cache-Control': 'no-cache',
-          'Connection': 'keep-alive',
-          'X-Stream': '1',
-          'X-Source': 'search-fallback'
-        }
-      });
-    }
+    return new Response(readable, {
+      headers: {
+        ...CORS,
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'X-Stream': '1',
+        'X-Source': 'search',
+      },
+    });
 
   } catch (err: any) {
     return new Response(
