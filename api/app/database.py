@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 from typing import AsyncGenerator
+from urllib.parse import urlparse, unquote
 
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -30,6 +31,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.engine.url import URL
 
 from .config import Settings, get_settings
 
@@ -42,44 +44,71 @@ class Base(DeclarativeBase):
     pass
 
 
-# ── DSN normalisation ────────────────────────────────────────────────────
-def _to_async_dsn(raw: str) -> str:
+# ── DSN parsing ──────────────────────────────────────────────────────────
+def _parse_supabase_dsn(raw: str) -> tuple[URL, dict]:
     """
-    Supabase shows DSNs as `postgresql://...`. SQLAlchemy needs the explicit
-    `postgresql+asyncpg://` driver prefix to pick the async driver.
+    Parse the DATABASE_URL into a SQLAlchemy URL with credentials in
+    connect_args. This is necessary because Supabase Supavisor pooler
+    usernames look like `postgres.<project-ref>` and URL parsers can
+    mis-handle the dot in the user portion. Passing the credentials via
+    connect_args bypasses every URL-parsing layer.
+
+    Returns (url_without_credentials, connect_args_with_credentials).
     """
-    if raw.startswith("postgres://"):  # legacy alias
-        raw = "postgresql://" + raw[len("postgres://"):]
-    if raw.startswith("postgresql://") and "+asyncpg" not in raw:
-        return "postgresql+asyncpg://" + raw[len("postgresql://"):]
-    return raw
+    # Normalise scheme to asyncpg
+    dsn = raw
+    if dsn.startswith("postgres://"):
+        dsn = "postgresql://" + dsn[len("postgres://"):]
+
+    parsed = urlparse(dsn)
+    user = unquote(parsed.username) if parsed.username else None
+    password = unquote(parsed.password) if parsed.password else None
+    host = parsed.hostname
+    port = parsed.port or 5432
+    database = parsed.path.lstrip("/") or "postgres"
+
+    # Build a credential-less URL — SQLAlchemy will use this for engine init,
+    # and asyncpg receives the real user/password from connect_args.
+    url = URL.create(
+        drivername="postgresql+asyncpg",
+        host=host,
+        port=port,
+        database=database,
+    )
+
+    connect_args: dict = {
+        "user": user,
+        "password": password,
+        # asyncpg can't use libpq prepared statements through Supavisor in
+        # transaction mode — disable the statement cache.
+        "statement_cache_size": 0,
+        # SSL is required by Supavisor for tenant authentication. Without
+        # TLS the pooler downgrades SCRAM and strips the project-ref suffix
+        # from the username, producing `password authentication failed for
+        # user "postgres"`.
+        "ssl": "require",
+    }
+    return url, connect_args
 
 
 # ── Engine + session factory (module-level singletons) ───────────────────
 _settings: Settings = get_settings()
-_async_dsn: str = _to_async_dsn(_settings.DATABASE_URL)
+_url, _connect_args = _parse_supabase_dsn(_settings.DATABASE_URL)
+
+logger.info(
+    "Initialising DB engine: host=%s port=%s db=%s user=%s ssl=require",
+    _url.host, _url.port, _url.database, _connect_args.get("user"),
+)
 
 engine: AsyncEngine = create_async_engine(
-    _async_dsn,
+    _url,
     echo=_settings.DB_ECHO_SQL,
     pool_size=_settings.DB_POOL_SIZE,
     max_overflow=_settings.DB_MAX_OVERFLOW,
     pool_timeout=_settings.DB_POOL_TIMEOUT_SECONDS,
     pool_pre_ping=True,
-    # Render-friendly: do not keep stale connections beyond 30 min.
     pool_recycle=1800,
-    # asyncpg can't use libpq prepared statements when going through
-    # PgBouncer/Supavisor in transaction mode. Setting statement cache size
-    # to 0 keeps things safe regardless of which Supabase pooler is in play.
-    #
-    # SSL is REQUIRED when connecting to Supabase's Supavisor pooler with
-    # the `postgres.<project-ref>` tenant username. Without TLS the pooler
-    # downgrades the SCRAM exchange and strips the tenant suffix, producing
-    # `password authentication failed for user "postgres"`.
-    connect_args={
-        "statement_cache_size": 0,
-        "ssl": "require",
-    },
+    connect_args=_connect_args,
 )
 
 
