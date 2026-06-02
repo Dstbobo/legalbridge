@@ -3148,23 +3148,6 @@ async function renderDocumentCard(targetDiv, rawText, userMessage, actionsHtml, 
   try { await ensureChatExists(userMessage); } catch (e) { console.error('ensureChat:', e); }
   const savedDoc = await saveDocumentToLibrary(docTitle, cleaned);
 
-  // 7a. One-time notification permission prompt — fires AFTER the first
-  // document has successfully been generated and saved, so the user sees
-  // the value before being asked. The flag lives in localStorage so we
-  // never re-prompt across reloads. Silently no-ops if the browser doesn't
-  // support Notifications or the user has already chosen.
-  try {
-    if (savedDoc && window.Notification && Notification.permission === 'default'
-        && !localStorage.getItem('lbDocNotifAsked')) {
-      localStorage.setItem('lbDocNotifAsked', '1');
-      // Small delay so the request doesn't clash with the doc-rendering
-      // animation; iOS in particular shows the system dialog over our UI.
-      setTimeout(() => {
-        try { Notification.requestPermission().catch(()=>{}); } catch (_) {}
-      }, 1500);
-    }
-  } catch (_) { /* permission UI is best-effort */ }
-
   const assistantMarker = savedDoc
     ? '__DOC__:' + savedDoc.id + ':' + docTitle
     : cleaned;
@@ -6447,23 +6430,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   <script>
   // ── SERVICE WORKER ──
-  // sw.js v6 is in safe mode — same-origin GET caching only, never
-  // touches chat-stream or any cross-origin / POST request. The
-  // background document-streaming feature is parked until we can
-  // reproduce the v5 failure in a controlled environment.
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/sw.js').catch(()=>{});
-    // If v6 takes over and can't navigate() us itself (older browsers),
-    // reload from network ourselves. Guarded by sessionStorage so we
-    // never reload-loop.
-    navigator.serviceWorker.addEventListener('message', (e) => {
-      if (e.data && e.data.type === 'sw-please-reload') {
-        if (!sessionStorage.getItem('lbSWReloaded')) {
-          sessionStorage.setItem('lbSWReloaded', '1');
-          location.reload();
-        }
-      }
-    });
   }
 
   let deferredPrompt = null;
