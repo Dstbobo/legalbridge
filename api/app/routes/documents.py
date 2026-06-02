@@ -1,0 +1,336 @@
+"""
+LegalBridge API — /v1/documents endpoint.
+
+Strangler-pattern replacement for the `chat-documents` Supabase Edge
+Function. Identical input shape, identical SSE output contract, identical
+system-prompt construction. The frontend can move one URL at a time.
+
+Request:
+    POST /v1/documents
+    Authorization: Bearer <supabase-jwt>            (optional in Phase 1)
+    Content-Type: application/json
+    {
+        "messages": [{"role": "user", "content": "..."}, ...],
+        "userType": "lawyer" | "non_lawyer" | "other" | ...,
+        "summary":  "<rolling conversation summary>",
+        "profile":  {"state": "Lagos", "specializations": ["litigation"]}
+    }
+
+Response: text/event-stream
+    data: {"text": "first chunk"}\n\n
+    data: {"text": "second chunk"}\n\n
+    ...
+    data: [DONE]\n\n
+
+Headers (parity with the Edge Function):
+    X-Stream: 1
+    X-Source: documents
+    Cache-Control: no-cache
+    Connection: keep-alive
+"""
+from __future__ import annotations
+
+import json
+import logging
+from typing import Any, AsyncIterator, Dict, List, Optional
+
+from fastapi import APIRouter, Depends, Request
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
+
+from ..auth import AuthenticatedUser, optional_user
+from ..config import Settings, get_settings
+from ..database import engine
+from ..services import anthropic_client
+from ..services.anthropic_client import AnthropicError
+from ..services.document_prompts import (
+    DOCUMENT_PROMPTS,
+    detect_document_type,
+    extract_facts,
+    nigerian_today,
+)
+from ..services.document_templates import StoredTemplate, find_template
+
+logger = logging.getLogger("legalbridge.documents")
+
+router = APIRouter(prefix="/v1/documents", tags=["documents"])
+
+
+# ── Request schema ───────────────────────────────────────────────────────
+class ChatMessage(BaseModel):
+    role: str = "user"
+    content: str = ""
+
+
+class DocumentRequest(BaseModel):
+    messages: List[ChatMessage] = Field(default_factory=list)
+    userType: str = "other"  # noqa: N815 — mirror EF field name exactly
+    summary: str = ""
+    profile: Dict[str, Any] = Field(default_factory=dict)
+
+
+# ── System-prompt builder ────────────────────────────────────────────────
+def _build_system_prompt(
+    *,
+    last_msg: str,
+    doc_type: str,
+    user_type: str,
+    summary: str,
+    profile: Dict[str, Any],
+    stored: Optional[StoredTemplate],
+) -> str:
+    """
+    1:1 port of the systemPrompt construction inside chat-documents/index.ts.
+    Same ordering, same wording, same flags — only the language differs.
+    """
+    today = nigerian_today()
+    doc_template = DOCUMENT_PROMPTS.get(doc_type) or DOCUMENT_PROMPTS["agreement"]
+
+    sp = (
+        "You are LegalBridge AI, built by DST Global Innovative Nigeria Ltd "
+        "(Akwanga, Nasarawa State), founded by Daniel Thankgod. Never mention "
+        "Google, Gemini, Claude, Anthropic, or any underlying AI technology. "
+        "Never mention any knowledge cutoff date. Never include AI disclaimers "
+        "inside a document.\n\n"
+        "DOCUMENT GENERATION BEHAVIOR (HIGH PRIORITY)\n\n"
+        "You are LegalBridge AI, a Nigerian legal drafting assistant. Your role "
+        "is to generate complete, professional legal documents immediately upon "
+        "request.\n\n"
+        "Core Behavior:\n\n"
+        "Extract First — Carefully read the user's message. Identify and extract "
+        "all details provided including names, charges, sections of law, police "
+        "station, court, parties, dates, addresses, amounts, and any other "
+        "relevant facts. Use these details directly in the draft. Never ignore "
+        "information already provided by the user.\n\n"
+        f"Default Second — If some details are missing fill them with standard "
+        f"Nigerian legal defaults. Court defaults to High Court of Justice of "
+        f"the relevant state. Jurisdiction defaults to the state mentioned or "
+        f"Abuja if none. Dates default to today's date ({today}). Counsel "
+        f"defaults to Counsel for the Applicant. Ensure the document remains "
+        f"legally coherent and properly formatted.\n\n"
+        "Generate Third — Produce the complete legal document in one response. "
+        "Use professional Nigerian legal style with correct headings, citations, "
+        "and structure. Do not delay or ask for confirmation if sufficient "
+        "details are already present.\n\n"
+        "Ask Only as Last Resort — Only ask for details when the user provides "
+        "absolutely nothing — for example just says \"draft a contract\" with no "
+        "names, no parties, no context. Otherwise never ask the user to repeat "
+        "details they already gave.\n\n"
+        "NEED_DETAILS Rule — Return NEED_DETAILS only when BOTH conditions are "
+        "true: the legal document type cannot be determined AND the document "
+        "cannot reasonably be drafted even with Nigerian legal defaults. When "
+        "in doubt — Extract, Default, Generate. Never ask.\n\n"
+        "When you do return NEED_DETAILS, format it as:\n"
+        "NEED_DETAILS: [one short sentence asking for what's needed, then a "
+        "brief numbered list of 3-5 fields]\n"
+        "The literal string \"NEED_DETAILS:\" must appear ONLY as the very first "
+        "characters of a clarification response. NEVER include it inside a "
+        "generated document.\n\n"
+        "Tone and Style — Write in clear formal Nigerian legal drafting style. "
+        "Ensure the document is immediately usable in practice. Output only the "
+        "requested document, not commentary or explanation.\n\n"
+        "Additional Drafting Standards:\n"
+        f"- Today's date is {today}. Write any required date in this exact "
+        f"Nigerian format. Never use placeholder text like [DATE], [TODAY'S "
+        f"DATE], or [INSERT DATE].\n"
+        "- For court reference numbers that don't exist yet, write "
+        "\"Suit No: [TO BE ASSIGNED]\" only.\n"
+        "- Number all clauses properly.\n"
+        "- Include execution/signature blocks (signature lines, witnesses, "
+        "jurat where applicable).\n"
+        "- Cite governing Nigerian statutes in relevant clauses by exact "
+        "section number.\n"
+        "- NEVER add casual sign-offs (\"Good luck\", \"Hope this helps\", "
+        "\"Best wishes\", \"Feel free to reach out\"). Documents end with the "
+        "signature/jurat/execution block only.\n\n"
+        f"DOCUMENT TYPE DETECTED: {doc_type.upper()}\n"
+        f"{doc_template}"
+    )
+
+    # Persona context (state only — no role-conditional output shape).
+    state = profile.get("state") if isinstance(profile, dict) else None
+    if state:
+        sp += f"\nUser's state: {state} — apply state-specific laws where relevant."
+
+    if user_type == "lawyer" and isinstance(profile, dict):
+        specs = profile.get("specializations") or []
+        if isinstance(specs, list) and specs:
+            sp += "\nUser's practice specializations: " + ", ".join(map(str, specs)) + "."
+
+    sp += (
+        "\n\nIMPORTANT: Output ONLY the legal document. No introduction "
+        "sentence (\"Here is your...\"), no closing prose (\"This document "
+        "means...\", \"Let me know if...\"), no plain-English explanation "
+        "appended. The document must START with the formal heading (e.g. "
+        "\"# AFFIDAVIT\", \"IN THE HIGH COURT...\", \"THIS TENANCY "
+        "AGREEMENT...\") and END with the signature/jurat/execution block. "
+        "Nothing else.\n\n"
+        "NEVER wrap the document in markdown code fences (```). Output the "
+        "document directly as plain markdown content with # / ## / **bold** "
+        "formatting — never as a code block."
+    )
+
+    # Fill-template mode.
+    if stored:
+        applicable = (
+            f"Applicable Law: {stored.applicable_law}\n\n"
+            if stored.applicable_law
+            else ""
+        )
+        if stored.is_official:
+            sp += (
+                "\n\n[FILL-TEMPLATE MODE — OFFICIAL FORM]\n"
+                "The following is a Nigerian legal template that MUST be "
+                "followed structurally without modification. Fill in every "
+                "`{{PLACEHOLDER}}` with the actual value from the user's "
+                f"message or the Nigerian-context default (today's date is "
+                f"{today}). Do NOT add new sections, do NOT remove sections, "
+                "do NOT rewrite paragraphs. ONLY substitute placeholders.\n\n"
+                f"{applicable}"
+                f"TEMPLATE:\n{stored.content}\n[END TEMPLATE]"
+            )
+        else:
+            sp += (
+                "\n\n[FILL-TEMPLATE MODE — LAWYER-DRAFTED]\n"
+                "The following is a Nigerian legal template authored by senior "
+                "practitioners. Use it as the structural basis for your draft. "
+                "Fill in every `{{PLACEHOLDER}}` with the actual value from the "
+                "user's message or a sensible Nigerian-context default "
+                f"(today's date is {today}). You may add minor extra clauses if "
+                "the user's facts clearly require them, but you must preserve "
+                "the template's structure, headings, and legal language. Do "
+                "NOT rewrite sections that are already complete.\n\n"
+                f"{applicable}"
+                f"TEMPLATE:\n{stored.content}\n[END TEMPLATE]"
+            )
+
+    # Conversation summary.
+    if summary:
+        sp += f"\n\n[CONVERSATION CONTEXT]\n{summary}\n[END CONTEXT]"
+
+    # Deterministic FACTS block.
+    facts = extract_facts(last_msg)
+    if facts:
+        sp += (
+            "\n\n[FACTS PROVIDED BY USER — YOU MUST USE THESE EXACT VALUES IN THE DRAFT]\n"
+            + "\n".join("• " + f for f in facts)
+            + "\n\nUse these EXACT names and details in the document. NEVER "
+              "substitute them with [APPLICANT'S NAME], [PETITIONER'S NAME], "
+              "[DEPONENT'S NAME], [NAME], or any other placeholder. The person "
+              "named above is the Applicant/Petitioner/Deponent/Party — use "
+              "their actual name in every field where that role appears.\n"
+              "[END FACTS]\n\n"
+              f"User's original request: \"{last_msg[:600]}\""
+        )
+    else:
+        sp += f"\n\nUser's original request: \"{last_msg[:600]}\""
+
+    return sp
+
+
+# ── SSE stream generator ─────────────────────────────────────────────────
+def _sse_chunk(text_value: str) -> bytes:
+    return f"data: {json.dumps({'text': text_value}, ensure_ascii=False)}\n\n".encode("utf-8")
+
+
+_SSE_DONE = b"data: [DONE]\n\n"
+
+
+def _is_billing_error(msg: str) -> bool:
+    import re as _re
+    return bool(_re.search(r"credit balance|billing|429|rate.?limit", msg, _re.IGNORECASE))
+
+
+async def _generate_sse(
+    *,
+    system_prompt: str,
+    messages: List[Dict[str, Any]],
+    settings: Settings,
+) -> AsyncIterator[bytes]:
+    """Stream Claude deltas as SSE events. Errors become a single user-facing chunk + [DONE]."""
+    try:
+        async for delta in anthropic_client.stream_text_deltas(
+            system=system_prompt,
+            messages=messages,
+            settings=settings,
+        ):
+            yield _sse_chunk(delta)
+    except AnthropicError as exc:
+        logger.error("chat-documents stream error: %s", exc)
+        if _is_billing_error(str(exc)):
+            user_facing = (
+                "Document service temporarily unavailable due to a billing issue. "
+                "The operator has been notified — please try again shortly."
+            )
+        else:
+            user_facing = "Document drafting failed. Please try again."
+        yield _sse_chunk(user_facing)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("chat-documents unexpected error: %s", exc)
+        yield _sse_chunk("Document drafting failed. Please try again.")
+    finally:
+        yield _SSE_DONE
+
+
+# ── Route ────────────────────────────────────────────────────────────────
+@router.post(
+    "",
+    summary="Generate a Nigerian legal document (streaming SSE)",
+    response_class=StreamingResponse,
+)
+async def generate_document(
+    payload: DocumentRequest,
+    request: Request,
+    user: Optional[AuthenticatedUser] = Depends(optional_user),
+    settings: Settings = Depends(get_settings),
+) -> StreamingResponse:
+    """
+    Streaming document drafter. See module docstring for the full contract.
+
+    Auth: `optional_user` — matches the Edge Function which accepts anonymous
+    traffic (Supabase function auth gates it via the function URL secret, not
+    a per-user check). We still verify JWTs when one is supplied, so we can
+    attribute usage in logs.
+    """
+    messages_dicts: List[Dict[str, Any]] = [m.model_dump() for m in payload.messages]
+    last_msg = messages_dicts[-1]["content"] if messages_dicts else ""
+    doc_type = detect_document_type(last_msg)
+
+    # Template lookup (alias → DB exact → Voyage semantic).
+    stored = await find_template(engine, last_msg, settings=settings) if last_msg else None
+
+    system_prompt = _build_system_prompt(
+        last_msg=last_msg,
+        doc_type=doc_type,
+        user_type=payload.userType,
+        summary=payload.summary,
+        profile=payload.profile,
+        stored=stored,
+    )
+
+    logger.info(
+        "documents.generate user=%s doc_type=%s template=%s msg_chars=%d",
+        (user.id if user else "anon"),
+        doc_type,
+        (stored.document_type if stored else "none"),
+        len(last_msg),
+    )
+
+    return StreamingResponse(
+        _generate_sse(
+            system_prompt=system_prompt,
+            messages=messages_dicts,
+            settings=settings,
+        ),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+            "X-Stream": "1",
+            "X-Source": "documents",
+        },
+    )
+
+
+__all__ = ["router"]

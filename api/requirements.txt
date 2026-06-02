@@ -16,8 +16,13 @@ asyncpg==0.30.0
 # JWT verification for Supabase auth tokens
 PyJWT==2.10.1
 
-# HTTP client (used later for Supabase REST calls if/when needed)
+# HTTP client — used for Anthropic Messages API + Voyage embeddings
 httpx==0.28.1
 
 # Optional but useful at this phase
 python-multipart==0.0.20
+
+# ── Test-only (Railway image installs everything, that's fine for now) ──
+pytest==8.3.4
+pytest-asyncio==0.25.0
+respx==0.22.0
