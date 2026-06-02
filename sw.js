@@ -27,8 +27,8 @@
  * a normal page fetch from CORS's point of view.
  */
 
-const SW_VERSION = '5.0.0';
-const CACHE = 'legalbridge-v5';
+const SW_VERSION = '5.1.0';
+const CACHE = 'legalbridge-v5-1';
 const ASSETS = [
   '/index.html',
   '/login.html',
@@ -157,46 +157,48 @@ async function handleDocStream(event) {
   const startedAt = Date.now();
   const id = 'sw-' + startedAt.toString(36) + '-' + Math.random().toString(36).slice(2, 8);
 
-  // Build an upstream request with the opt-in header REMOVED so the
-  // Edge Function's CORS layer doesn't reject it (it isn't whitelisted).
-  // The page-side request never actually hits the network — the SW
-  // intercepts before that — so the preflight is avoided entirely.
+  // Build an upstream Request that DROPS the opt-in header so the Edge
+  // Function's CORS allowlist doesn't reject it. We use the well-known
+  // "clone-with-overrides" pattern — pass the original Request as the
+  // first argument and override only what we need. This inherits the
+  // body, mode, credentials, cache, etc. from the original automatically
+  // and avoids the fragile manual reconstruction that v5.0.0 attempted.
   let upstreamReq;
   try {
     const cleanHeaders = new Headers(original.headers);
     cleanHeaders.delete(OPT_IN_HEADER);
-    // Body must be re-read; clone the original before reading.
-    const bodyClone = await original.clone().arrayBuffer();
-    upstreamReq = new Request(original.url, {
-      method: original.method,
-      headers: cleanHeaders,
-      body: bodyClone.byteLength ? bodyClone : undefined,
-      mode: original.mode,
-      credentials: original.credentials,
-      cache: original.cache,
-      redirect: original.redirect,
-      referrer: original.referrer,
-      integrity: original.integrity,
-    });
+    upstreamReq = new Request(original, { headers: cleanHeaders });
   } catch (err) {
-    // If we couldn't reconstruct the request, fall back to a plain network
-    // pass-through. The page may not get backgrounding survival but at
-    // least the request completes correctly.
-    return fetch(original);
+    // If we somehow can't even rebuild the request, hand the original
+    // straight to the network. The user loses backgrounding survival
+    // for this one call, but the request still goes through cleanly —
+    // no "Failed to fetch" from a busted SW path.
+    console.warn('[lb-sw] reconstruct failed, passing through:', err);
+    try { return await fetch(original); } catch (e) { throw e; }
   }
 
   let upstream;
   try {
     upstream = await fetch(upstreamReq);
-  } catch (_err) {
-    const body =
-      'data: ' +
-      JSON.stringify({ text: 'Network error reaching the document service. Please try again.' }) +
-      '\n\ndata: [DONE]\n\n';
-    return new Response(body, {
-      status: 200,
-      headers: { 'Content-Type': 'text/event-stream', 'X-SW-Stream-Id': id },
-    });
+  } catch (err) {
+    // Network really did fail (offline, DNS, TLS handshake, etc.). Try
+    // ONE more time with the original request as a last-ditch path
+    // before synthesising an SSE error — covers the case where there's
+    // something subtly wrong with our reconstructed request that the
+    // browser dislikes (rare, but better safe than sorry).
+    console.warn('[lb-sw] upstream fetch failed, retrying with original:', err);
+    try {
+      upstream = await fetch(original);
+    } catch (err2) {
+      const body =
+        'data: ' +
+        JSON.stringify({ text: 'Network error reaching the document service. Please try again.' }) +
+        '\n\ndata: [DONE]\n\n';
+      return new Response(body, {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream', 'X-SW-Stream-Id': id },
+      });
+    }
   }
 
   // Non-OK or empty-body — return as-is so the page sees the real error.
