@@ -71,7 +71,15 @@ engine: AsyncEngine = create_async_engine(
     # asyncpg can't use libpq prepared statements when going through
     # PgBouncer/Supavisor in transaction mode. Setting statement cache size
     # to 0 keeps things safe regardless of which Supabase pooler is in play.
-    connect_args={"statement_cache_size": 0},
+    #
+    # SSL is REQUIRED when connecting to Supabase's Supavisor pooler with
+    # the `postgres.<project-ref>` tenant username. Without TLS the pooler
+    # downgrades the SCRAM exchange and strips the tenant suffix, producing
+    # `password authentication failed for user "postgres"`.
+    connect_args={
+        "statement_cache_size": 0,
+        "ssl": "require",
+    },
 )
 
 
