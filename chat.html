@@ -2784,29 +2784,13 @@ async function send() {
 
       // ── EDGE FUNCTION CALL (key stays server-side) ──
       const { data: { session } } = await sb.auth.getSession();
-      // Pre-fetch intent guess — same regex pair the post-fetch detector
-      // uses below. We use it ONLY to decide whether to opt this request
-      // into the Service Worker's background-streaming path. False
-      // positives are harmless (just enables background-survival on a
-      // non-doc message); false negatives mean a doc request misses
-      // backgrounding survival but still streams normally.
-      const _swDraftRx = /\b(draft|prepare|write|generate|create|produce|make|compose|do up|file|fill|build|put together|help me (draft|prepare|write|generate|create|file|produce|make|put together)|can you (draft|prepare|write|generate|create|produce|make)|could you (draft|prepare|write|generate|create|produce|make)|please (draft|prepare|write|generate|create|produce|make)|i need (a|an|to file)|i want (a|an|to file)|i'?d like (a|an)|need help (drafting|preparing|writing|with))\b/i;
-      const _swDocRx = /\b(affidavit|agreement|contract|deed|petition|motion|writ|notice|memo(randum)?|letter|tenancy|lease|employment|offer\s+letter|divorce|petition\s+for\s+dissolution|power\s+of\s+attorney|MOU|NDA|non.?disclosure|consultancy|partnership|shareholders?|service\s+agreement|will|codicil|undertaking|guarantee|indemnity|loan\s+agreement|promissory\s+note|policy|terms\s+of\s+(use|service)|privacy\s+policy|cease\s+and\s+desist|demand\s+letter|FOI(\s+request)?|freedom\s+of\s+information|quit\s+notice|application|resolution|complaint|cover\s+letter|termination|warning|press\s+accreditation|response\s+letter|petition\s+letter|letter\s+of\s+demand|engagement\s+letter|bail\s+application|statement\s+of\s+claim|statement\s+of\s+defen[cs]e|originating\s+summons|trademark\s+assignment|brief|deposition|charge\s+sheet)\b/i;
-      const _swLikelyDoc = _swDraftRx.test(text) && _swDocRx.test(text);
-      const _swHeaders = {
-        'Content-Type': 'application/json',
-        'apikey': SUPABASE_ANON_KEY,
-        'Authorization': `Bearer ${session ? session.access_token : SUPABASE_ANON_KEY}`
-      };
-      if (_swLikelyDoc && 'serviceWorker' in navigator && navigator.serviceWorker.controller) {
-        // Opt this request into the SW's background-keeper path. The SW
-        // strips this header before forwarding upstream, so the Edge
-        // Function never sees it and CORS preflight is not triggered.
-        _swHeaders['X-LB-SW-Stream'] = '1';
-      }
       const res = await fetch(EDGE_URL, {
         method: 'POST',
-        headers: _swHeaders,
+        headers: {
+          'Content-Type': 'application/json',
+          'apikey': SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${session ? session.access_token : SUPABASE_ANON_KEY}`
+        },
         body: JSON.stringify({
           message: text,
           chatId: currentChatId
@@ -6463,13 +6447,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
   <script>
   // ── SERVICE WORKER ──
-  // Registers /sw.js (v5). The SW is strictly opt-in: it only intercepts
-  // chat-stream POSTs that carry the header `X-LB-SW-Stream: 1`. The
-  // document-fetch site below adds that header only when the message
-  // looks like a document request. Every other fetch — regular chat,
-  // status pings, images, CSS, JS, anything — passes through the SW
-  // with zero involvement. This avoids the v4 regression that broke
-  // non-SSE requests by accidentally wrapping their bodies.
+  // sw.js v6 is in safe mode — same-origin GET caching only, never
+  // touches chat-stream or any cross-origin / POST request. The
+  // background document-streaming feature is parked until we can
+  // reproduce the v5 failure in a controlled environment.
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/sw.js').catch(()=>{});
   }
