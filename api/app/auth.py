@@ -123,14 +123,27 @@ async def optional_user(
     settings: Settings = Depends(get_settings),
 ) -> Optional[AuthenticatedUser]:
     """
-    Lenient dependency: returns the user if a token is present and valid;
-    returns None for anonymous requests; raises 401 only when a token IS
-    supplied but cannot be verified.
+    Truly lenient dependency: returns the user if a token is present and
+    valid; returns None in ALL other cases — missing token, invalid token,
+    wrong algorithm, wrong audience, expired, anything.
+
+    Why fully silent: /v1/documents is proxied by the chat-stream Edge
+    Function which has already verified the user's JWT. The token
+    chat-stream forwards may use a different algorithm or audience claim
+    than our FastAPI PyJWT settings expect (e.g. Supabase anon key vs a
+    real user access token). We must never let an auth decode failure
+    turn into a 401 that breaks document generation for the end user.
     """
     if creds is None or not creds.credentials:
         return None
-    claims = _decode_token(creds.credentials, settings)
-    return _claims_to_user(claims)
+    try:
+        claims = _decode_token(creds.credentials, settings)
+        return _claims_to_user(claims)
+    except Exception:
+        # Any verification failure — wrong alg, bad audience, expired,
+        # malformed, etc. — is treated as anonymous. The document endpoint
+        # does not require authentication; chat-stream is the auth gate.
+        return None
 
 
 # ── Convenience for non-route code paths (e.g. middleware) ──────────────
