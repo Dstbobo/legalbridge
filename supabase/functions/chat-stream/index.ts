@@ -26,7 +26,7 @@ const SUPABASE_ANON = Deno.env.get("SUPABASE_ANON_KEY")!;
 const MODEL = 'claude-sonnet-4-5';
 
 // Internal hub URLs — chat-stream proxies to these for heavy work
-const FN_DOCUMENTS = `${SUPABASE_URL}/functions/v1/chat-documents`;
+const FN_DOCUMENTS = `https://api.legalbridge.ng/v1/documents`;
 const FN_TOOLS     = `${SUPABASE_URL}/functions/v1/chat-tools`;
 
 const CORS = {
