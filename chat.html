@@ -2784,13 +2784,29 @@ async function send() {
 
       // ── EDGE FUNCTION CALL (key stays server-side) ──
       const { data: { session } } = await sb.auth.getSession();
+      // Pre-fetch intent guess — same regex pair the post-fetch detector
+      // uses below. We use it ONLY to decide whether to opt this request
+      // into the Service Worker's background-streaming path. False
+      // positives are harmless (just enables background-survival on a
+      // non-doc message); false negatives mean a doc request misses
+      // backgrounding survival but still streams normally.
+      const _swDraftRx = /\b(draft|prepare|write|generate|create|produce|make|compose|do up|file|fill|build|put together|help me (draft|prepare|write|generate|create|file|produce|make|put together)|can you (draft|prepare|write|generate|create|produce|make)|could you (draft|prepare|write|generate|create|produce|make)|please (draft|prepare|write|generate|create|produce|make)|i need (a|an|to file)|i want (a|an|to file)|i'?d like (a|an)|need help (drafting|preparing|writing|with))\b/i;
+      const _swDocRx = /\b(affidavit|agreement|contract|deed|petition|motion|writ|notice|memo(randum)?|letter|tenancy|lease|employment|offer\s+letter|divorce|petition\s+for\s+dissolution|power\s+of\s+attorney|MOU|NDA|non.?disclosure|consultancy|partnership|shareholders?|service\s+agreement|will|codicil|undertaking|guarantee|indemnity|loan\s+agreement|promissory\s+note|policy|terms\s+of\s+(use|service)|privacy\s+policy|cease\s+and\s+desist|demand\s+letter|FOI(\s+request)?|freedom\s+of\s+information|quit\s+notice|application|resolution|complaint|cover\s+letter|termination|warning|press\s+accreditation|response\s+letter|petition\s+letter|letter\s+of\s+demand|engagement\s+letter|bail\s+application|statement\s+of\s+claim|statement\s+of\s+defen[cs]e|originating\s+summons|trademark\s+assignment|brief|deposition|charge\s+sheet)\b/i;
+      const _swLikelyDoc = _swDraftRx.test(text) && _swDocRx.test(text);
+      const _swHeaders = {
+        'Content-Type': 'application/json',
+        'apikey': SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${session ? session.access_token : SUPABASE_ANON_KEY}`
+      };
+      if (_swLikelyDoc && 'serviceWorker' in navigator && navigator.serviceWorker.controller) {
+        // Opt this request into the SW's background-keeper path. The SW
+        // strips this header before forwarding upstream, so the Edge
+        // Function never sees it and CORS preflight is not triggered.
+        _swHeaders['X-LB-SW-Stream'] = '1';
+      }
       const res = await fetch(EDGE_URL, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'apikey': SUPABASE_ANON_KEY,
-          'Authorization': `Bearer ${session ? session.access_token : SUPABASE_ANON_KEY}`
-        },
+        headers: _swHeaders,
         body: JSON.stringify({
           message: text,
           chatId: currentChatId
@@ -3147,6 +3163,23 @@ async function renderDocumentCard(targetDiv, rawText, userMessage, actionsHtml, 
   // 7. Persist to Supabase — chat record → document → messages
   try { await ensureChatExists(userMessage); } catch (e) { console.error('ensureChat:', e); }
   const savedDoc = await saveDocumentToLibrary(docTitle, cleaned);
+
+  // 7a. One-time notification permission prompt — fires AFTER the first
+  // document has successfully been generated and saved, so the user sees
+  // the value before being asked. The flag lives in localStorage so we
+  // never re-prompt across reloads. Silently no-ops if the browser doesn't
+  // support Notifications or the user has already chosen.
+  try {
+    if (savedDoc && window.Notification && Notification.permission === 'default'
+        && !localStorage.getItem('lbDocNotifAsked')) {
+      localStorage.setItem('lbDocNotifAsked', '1');
+      // Small delay so the request doesn't clash with the doc-rendering
+      // animation; iOS in particular shows the system dialog over our UI.
+      setTimeout(() => {
+        try { Notification.requestPermission().catch(()=>{}); } catch (_) {}
+      }, 1500);
+    }
+  } catch (_) { /* permission UI is best-effort */ }
 
   const assistantMarker = savedDoc
     ? '__DOC__:' + savedDoc.id + ':' + docTitle
@@ -6430,31 +6463,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
   <script>
   // ── SERVICE WORKER ──
-  // Registers /sw.js (v4) — adds background SSE keeper for document
-  // generation. Once the SW takes ownership of the chat-stream fetch,
-  // document drafting continues even when the mobile browser is
-  // minimised. The page's existing fetch() / SSE parsing code keeps
-  // working unchanged because the SW returns a synthetic Response that
-  // mirrors the upstream byte-for-byte.
+  // Registers /sw.js (v5). The SW is strictly opt-in: it only intercepts
+  // chat-stream POSTs that carry the header `X-LB-SW-Stream: 1`. The
+  // document-fetch site below adds that header only when the message
+  // looks like a document request. Every other fetch — regular chat,
+  // status pings, images, CSS, JS, anything — passes through the SW
+  // with zero involvement. This avoids the v4 regression that broke
+  // non-SSE requests by accidentally wrapping their bodies.
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/sw.js').then(reg => {
-      // Tell the SW our current visibility state — it uses this to
-      // decide whether to fire a "document ready" notification when
-      // a stream finishes while we're hidden.
-      const reportVisibility = () => {
-        const c = navigator.serviceWorker.controller;
-        if (c) c.postMessage({ type: 'visibility', visible: !document.hidden });
-      };
-      document.addEventListener('visibilitychange', reportVisibility);
-      navigator.serviceWorker.ready.then(reportVisibility).catch(()=>{});
-
-      // Ask once for notification permission (silently — we never nag).
-      // The SW only fires a notification if the user previously granted.
-      if (window.Notification && Notification.permission === 'default') {
-        // Defer the prompt until the user actually starts a document — done
-        // by chat.html's own send flow; we intentionally do nothing here.
-      }
-    }).catch(()=>{});
+    navigator.serviceWorker.register('/sw.js').catch(()=>{});
   }
 
   let deferredPrompt = null;

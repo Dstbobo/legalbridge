@@ -1,24 +1,34 @@
 /*
- * LegalBridge Service Worker (v4).
+ * LegalBridge Service Worker (v5).
  *
  * Two responsibilities:
- *   1. Static-asset caching (pre-existing behaviour from v3 — preserved).
- *   2. Background streaming for chat-stream — the SW process owns the
- *      upstream SSE fetch so that when a mobile user minimises the browser,
- *      the document keeps streaming and completes. The page reads chunks
- *      from a synthetic stream we hand back; additionally we broadcast
- *      each text delta via postMessage so a returning client (or a tab
- *      whose reader was throttled away) can re-attach to the running
- *      stream. When the upstream finishes while no client is visible we
- *      fire a "document ready" notification (best-effort).
+ *   1. Static-asset caching (preserved from v3).
+ *   2. Background streaming for *document* generation only.
  *
- * Scope of fetch interception: only chat-stream requests get the
- * streaming-keeper treatment. Every other request keeps the v3 caching
- * behaviour, byte-for-byte.
+ * Critical change vs v4: the SW now intercepts a chat-stream POST ONLY
+ * when the page explicitly opts in by setting the request header
+ *     X-LB-SW-Stream: 1
+ *
+ * Why this matters:
+ *   - chat-stream serves several modes (status pings, regular chat,
+ *     image analysis, document generation). v4 grabbed all of them and
+ *     wrapped their bodies in a synthetic ReadableStream, which broke
+ *     non-document modes that don't follow the SSE convention.
+ *   - With the opt-in header, regular chat / status calls / everything
+ *     else flow through to the network completely untouched. The SW
+ *     only acts on requests the page deliberately marks as documents.
+ *
+ * CORS note: the custom header would trigger a preflight against the
+ * Edge Function (which only whitelists authorization, apikey, content-
+ * type, x-client-info). We never let that preflight happen — the SW
+ * intercepts the page-side fetch event BEFORE any network call, strips
+ * the X-LB-SW-Stream header from the request, and then makes its own
+ * upstream fetch without it. The upstream request looks identical to
+ * a normal page fetch from CORS's point of view.
  */
 
-const SW_VERSION = '4.0.0';
-const CACHE = 'legalbridge-v4';
+const SW_VERSION = '5.0.0';
+const CACHE = 'legalbridge-v5';
 const ASSETS = [
   '/index.html',
   '/login.html',
@@ -27,15 +37,12 @@ const ASSETS = [
 ];
 
 const CHAT_STREAM_FRAGMENT = '/functions/v1/chat-stream';
+const OPT_IN_HEADER = 'x-lb-sw-stream';
 
-// In-memory book of currently-streaming chat-stream requests.
-// Keyed by an opaque id; entry shape:
+// In-memory record of in-flight document streams. Keyed by an opaque id
+// so a re-attaching client can ask "where is stream X now?".
 //   { id, accumulated, done, error, startedAt }
 const STREAMS = new Map();
-
-// Which client IDs reported themselves as "visible" via postMessage.
-// We use this to decide whether to show a notification on completion.
-const VISIBLE_CLIENTS = new Set();
 
 // ── Lifecycle ──────────────────────────────────────────────────────────
 self.addEventListener('install', (e) => {
@@ -56,14 +63,7 @@ self.addEventListener('activate', (e) => {
 // ── Page → SW message channel ──────────────────────────────────────────
 self.addEventListener('message', (event) => {
   const data = event.data || {};
-  const clientId = event.source && event.source.id;
   switch (data.type) {
-    case 'visibility':
-      if (clientId) {
-        if (data.visible) VISIBLE_CLIENTS.add(clientId);
-        else VISIBLE_CLIENTS.delete(clientId);
-      }
-      break;
     case 'reattach': {
       const s = STREAMS.get(data.id);
       if (s && event.source) {
@@ -77,8 +77,16 @@ self.addEventListener('message', (event) => {
       }
       break;
     }
+    case 'list-streams': {
+      if (event.source) {
+        const ids = [];
+        STREAMS.forEach((_, id) => ids.push(id));
+        event.source.postMessage({ type: 'streams', ids });
+      }
+      break;
+    }
     case 'ping':
-      event.source && event.source.postMessage({ type: 'pong', version: SW_VERSION });
+      if (event.source) event.source.postMessage({ type: 'pong', version: SW_VERSION });
       break;
   }
 });
@@ -86,29 +94,34 @@ self.addEventListener('message', (event) => {
 // ── Fetch interception ─────────────────────────────────────────────────
 self.addEventListener('fetch', (e) => {
   const req = e.request;
+
+  // 1. DOCUMENT STREAM (opt-in only) — must be POST + chat-stream URL +
+  //    explicit opt-in header. EVERYTHING else falls through to the
+  //    network unchanged. This is the critical guard that prevents
+  //    the SW from accidentally wrapping non-SSE responses.
+  if (
+    req.method === 'POST' &&
+    req.url.includes(CHAT_STREAM_FRAGMENT) &&
+    req.headers.get(OPT_IN_HEADER) === '1'
+  ) {
+    e.respondWith(handleDocStream(e));
+    return;
+  }
+
+  // 2. Static-asset caching (v3 behaviour, preserved verbatim) — only
+  //    applies to same-origin GETs. Cross-origin POSTs (Supabase REST,
+  //    chat-stream non-document calls, anthropic, etc.) flow through
+  //    the browser's normal fetch path with ZERO SW involvement.
   const url = req.url;
+  if (req.method !== 'GET') return; // ← do not touch any non-GET we didn't already opt in to
 
-  // 1. Chat-stream gets the streaming-keeper treatment. Must come FIRST
-  //    so the v3 supabase.co catch-all doesn't grab it. We only intercept
-  //    POST — GET requests to the same path are not document streams.
-  if (req.method === 'POST' && url.includes(CHAT_STREAM_FRAGMENT)) {
-    e.respondWith(handleChatStreamFetch(e));
-    return;
-  }
-
-  // 2. Other API calls — always network, fall back to cache on offline.
-  if (url.includes('supabase.co') || url.includes('googleapis') || url.includes('anthropic') || url.includes('legalbridge.ng/v1/')) {
-    e.respondWith(fetch(req).catch(() => caches.match(req)));
-    return;
-  }
-
-  // 3. HTML pages — network first.
+  // HTML pages — network first.
   if (req.mode === 'navigate' || url.endsWith('.html') || url.endsWith('/')) {
     e.respondWith(
       fetch(req)
         .then((res) => {
           const clone = res.clone();
-          caches.open(CACHE).then((c) => c.put(req, clone));
+          caches.open(CACHE).then((c) => c.put(req, clone)).catch(() => {});
           return res;
         })
         .catch(() => caches.match(req))
@@ -116,7 +129,13 @@ self.addEventListener('fetch', (e) => {
     return;
   }
 
-  // 4. Static assets — cache first.
+  // Same-origin static assets — cache first.
+  let sameOrigin = false;
+  try {
+    sameOrigin = new URL(url).origin === self.location.origin;
+  } catch (_) {}
+  if (!sameOrigin) return; // never touch cross-origin GETs either
+
   e.respondWith(
     caches.match(req).then(
       (cached) =>
@@ -124,7 +143,7 @@ self.addEventListener('fetch', (e) => {
         fetch(req).then((res) => {
           if (res.status === 200) {
             const clone = res.clone();
-            caches.open(CACHE).then((c) => c.put(req, clone));
+            caches.open(CACHE).then((c) => c.put(req, clone)).catch(() => {});
           }
           return res;
         })
@@ -132,20 +151,44 @@ self.addEventListener('fetch', (e) => {
   );
 });
 
-// ── chat-stream SSE keeper ─────────────────────────────────────────────
-async function handleChatStreamFetch(event) {
-  const req = event.request;
+// ── Document streaming handler ─────────────────────────────────────────
+async function handleDocStream(event) {
+  const original = event.request;
   const startedAt = Date.now();
   const id = 'sw-' + startedAt.toString(36) + '-' + Math.random().toString(36).slice(2, 8);
 
-  // Kick off the upstream fetch from the SW process so it survives the
-  // page being backgrounded.
+  // Build an upstream request with the opt-in header REMOVED so the
+  // Edge Function's CORS layer doesn't reject it (it isn't whitelisted).
+  // The page-side request never actually hits the network — the SW
+  // intercepts before that — so the preflight is avoided entirely.
+  let upstreamReq;
+  try {
+    const cleanHeaders = new Headers(original.headers);
+    cleanHeaders.delete(OPT_IN_HEADER);
+    // Body must be re-read; clone the original before reading.
+    const bodyClone = await original.clone().arrayBuffer();
+    upstreamReq = new Request(original.url, {
+      method: original.method,
+      headers: cleanHeaders,
+      body: bodyClone.byteLength ? bodyClone : undefined,
+      mode: original.mode,
+      credentials: original.credentials,
+      cache: original.cache,
+      redirect: original.redirect,
+      referrer: original.referrer,
+      integrity: original.integrity,
+    });
+  } catch (err) {
+    // If we couldn't reconstruct the request, fall back to a plain network
+    // pass-through. The page may not get backgrounding survival but at
+    // least the request completes correctly.
+    return fetch(original);
+  }
+
   let upstream;
   try {
-    upstream = await fetch(req);
+    upstream = await fetch(upstreamReq);
   } catch (_err) {
-    // Hard network failure — synthesise an SSE error the existing page
-    // parser will render gracefully.
     const body =
       'data: ' +
       JSON.stringify({ text: 'Network error reaching the document service. Please try again.' }) +
@@ -156,7 +199,7 @@ async function handleChatStreamFetch(event) {
     });
   }
 
-  // Non-OK / no-body upstream — just forward as-is.
+  // Non-OK or empty-body — return as-is so the page sees the real error.
   if (!upstream.ok || !upstream.body) {
     return upstream;
   }
@@ -178,15 +221,17 @@ async function handleChatStreamFetch(event) {
             const { done, value } = await reader.read();
             if (done) break;
 
-            // Forward raw bytes to the page — existing reader stays happy.
+            // Forward raw bytes to the page reader so the existing SSE
+            // parser keeps working byte-for-byte.
             try {
               controller.enqueue(value);
             } catch (_) {
-              // Page reader was cancelled. We still keep reading upstream
-              // because a re-attaching client may want the result.
+              // Page reader cancelled — keep going so background
+              // completion still works.
             }
 
-            // Parse SSE so we can update accumulated + broadcast deltas.
+            // Parse SSE so we can mirror text deltas to all clients via
+            // postMessage and update our accumulated buffer.
             sseBuffer += decoder.decode(value, { stream: true });
             const lines = sseBuffer.split('\n');
             sseBuffer = lines.pop() || '';
@@ -206,31 +251,29 @@ async function handleChatStreamFetch(event) {
             }
           }
           entry.done = true;
-          try {
-            controller.close();
-          } catch (_) {}
+          try { controller.close(); } catch (_) {}
           broadcast({ type: 'stream-end', id, accumulated: entry.accumulated });
           await maybeNotify(entry);
         } catch (err) {
           entry.done = true;
           entry.error = (err && err.message) || String(err);
-          try {
-            controller.error(err);
-          } catch (_) {}
+          try { controller.error(err); } catch (_) {}
           broadcast({ type: 'stream-error', id, error: entry.error });
         } finally {
-          // Keep the entry alive for 5 minutes so a late re-attach still works.
+          // Keep the entry around for 5 minutes for re-attach.
           setTimeout(() => STREAMS.delete(id), 5 * 60 * 1000);
         }
       })();
     },
     cancel() {
-      // Page reader cancelled — intentionally do NOT abort upstream;
-      // we want background completion.
+      // Intentionally do NOT abort the upstream — that defeats the
+      // entire point. The SW keeps reading so a re-attaching client
+      // can pick up the result.
     },
   });
 
-  // Mirror upstream headers so the page still sees X-Stream, X-Intent, X-Source.
+  // Mirror upstream headers so the page still sees X-Stream / X-Intent /
+  // X-Source / Content-Type unchanged.
   const outHeaders = new Headers();
   upstream.headers.forEach((value, key) => outHeaders.set(key, value));
   outHeaders.set('X-SW-Stream-Id', id);
@@ -246,15 +289,12 @@ async function handleChatStreamFetch(event) {
 async function broadcast(message) {
   const all = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
   for (const c of all) {
-    try {
-      c.postMessage(message);
-    } catch (_) {}
+    try { c.postMessage(message); } catch (_) {}
   }
 }
 
-// ── "Document ready" notification when finishing in background ─────────
+// ── "Document ready" notification when finishing while hidden ──────────
 async function maybeNotify(entry) {
-  // Only fire for non-trivial documents and only when no client is visible.
   if (!entry.accumulated || entry.accumulated.length < 200) return;
   try {
     const all = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
