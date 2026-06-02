@@ -11,8 +11,8 @@
  * it once we can reproduce the failure in a controlled environment.
  */
 
-const SW_VERSION = '6.0.0';
-const CACHE = 'legalbridge-v6';
+const SW_VERSION = '6.1.0';
+const CACHE = 'legalbridge-v6-1';
 const ASSETS = [
   '/index.html',
   '/login.html',
@@ -43,6 +43,17 @@ self.addEventListener('activate', (e) => {
       await Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)));
     } catch (_) {}
     await self.clients.claim();
+    // Force any tab still showing the broken v4/v5-cached HTML to reload
+    // from network with this fresh SW in control. Without this, the user
+    // could sit on a stale page for hours.
+    try {
+      const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      for (const w of wins) {
+        try { await w.navigate(w.url); } catch (_) {
+          try { w.postMessage({ type: 'sw-please-reload', version: SW_VERSION }); } catch (_) {}
+        }
+      }
+    } catch (_) {}
   })());
 });
 

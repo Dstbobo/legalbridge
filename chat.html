@@ -6453,6 +6453,17 @@ document.addEventListener('DOMContentLoaded', () => {
   // reproduce the v5 failure in a controlled environment.
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/sw.js').catch(()=>{});
+    // If v6 takes over and can't navigate() us itself (older browsers),
+    // reload from network ourselves. Guarded by sessionStorage so we
+    // never reload-loop.
+    navigator.serviceWorker.addEventListener('message', (e) => {
+      if (e.data && e.data.type === 'sw-please-reload') {
+        if (!sessionStorage.getItem('lbSWReloaded')) {
+          sessionStorage.setItem('lbSWReloaded', '1');
+          location.reload();
+        }
+      }
+    });
   }
 
   let deferredPrompt = null;

@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LegalBridge — reset</title>
+  <style>
+    html, body { margin: 0; padding: 0; background: #0b0c10; color: #e6e8eb; font: 16px/1.5 -apple-system, system-ui, sans-serif; }
+    main { max-width: 520px; margin: 60px auto; padding: 28px; background: #14161b; border: 1px solid #232730; border-radius: 14px; }
+    h1 { font-size: 18px; margin: 0 0 8px; }
+    p { margin: 8px 0; color: #b3b9c2; font-size: 14px; }
+    .row { margin-top: 16px; padding: 12px 14px; background: #1a1d24; border-radius: 8px; font-size: 13px; }
+    .ok { color: #6ee7a1; }
+    .bad { color: #ff8888; }
+    .step { color: #9aa0a8; }
+    a.btn { display: inline-block; margin-top: 18px; padding: 10px 18px; background: #6363ff; color: white; border-radius: 8px; text-decoration: none; font-weight: 600; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Resetting LegalBridge in your browser…</h1>
+  <p>This page unregisters every Service Worker for legalbridge.ng and clears
+  all cached assets. It runs entirely inline so it works even if a previous
+  broken Service Worker is intercepting traffic.</p>
+  <div id="log"></div>
+  <a id="back" class="btn" href="/chat.html" style="display:none">Return to chat</a>
+</main>
+<script>
+(async function () {
+  const log = document.getElementById('log');
+  const back = document.getElementById('back');
+  function add(cls, text) {
+    const d = document.createElement('div');
+    d.className = 'row ' + cls;
+    d.textContent = text;
+    log.appendChild(d);
+  }
+
+  let didSomething = false;
+
+  // 1. Unregister every SW under this origin.
+  if ('serviceWorker' in navigator) {
+    try {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      if (regs.length === 0) {
+        add('step', 'No Service Worker registrations found.');
+      }
+      for (const r of regs) {
+        try {
+          await r.unregister();
+          didSomething = true;
+          add('ok', 'Unregistered Service Worker at scope ' + r.scope);
+        } catch (e) {
+          add('bad', 'Failed to unregister ' + r.scope + ': ' + (e.message || e));
+        }
+      }
+    } catch (e) {
+      add('bad', 'Could not enumerate Service Workers: ' + (e.message || e));
+    }
+  } else {
+    add('step', 'This browser has no Service Worker support — nothing to clear.');
+  }
+
+  // 2. Wipe every Cache Storage entry.
+  if ('caches' in self) {
+    try {
+      const keys = await caches.keys();
+      for (const k of keys) {
+        await caches.delete(k);
+        didSomething = true;
+        add('ok', 'Deleted cache: ' + k);
+      }
+      if (keys.length === 0) add('step', 'No caches to delete.');
+    } catch (e) {
+      add('bad', 'Could not delete caches: ' + (e.message || e));
+    }
+  }
+
+  // 3. Best-effort: kill IndexedDB databases too (some browsers expose .databases).
+  try {
+    if (indexedDB && indexedDB.databases) {
+      const dbs = await indexedDB.databases();
+      for (const db of dbs) {
+        try { indexedDB.deleteDatabase(db.name); add('ok', 'Deleted IndexedDB: ' + db.name); } catch (_) {}
+      }
+    }
+  } catch (_) {}
+
+  add(didSomething ? 'ok' : 'step', didSomething
+    ? 'Reset complete. Tap the button below to return to chat.'
+    : 'Nothing needed clearing. Tap the button below to return to chat.');
+  back.style.display = 'inline-block';
+})();
+</script>
+</body>
+</html>
