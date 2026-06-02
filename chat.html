@@ -6430,8 +6430,31 @@ document.addEventListener('DOMContentLoaded', () => {
 
   <script>
   // ── SERVICE WORKER ──
+  // Registers /sw.js (v4) — adds background SSE keeper for document
+  // generation. Once the SW takes ownership of the chat-stream fetch,
+  // document drafting continues even when the mobile browser is
+  // minimised. The page's existing fetch() / SSE parsing code keeps
+  // working unchanged because the SW returns a synthetic Response that
+  // mirrors the upstream byte-for-byte.
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/sw.js').catch(()=>{});
+    navigator.serviceWorker.register('/sw.js').then(reg => {
+      // Tell the SW our current visibility state — it uses this to
+      // decide whether to fire a "document ready" notification when
+      // a stream finishes while we're hidden.
+      const reportVisibility = () => {
+        const c = navigator.serviceWorker.controller;
+        if (c) c.postMessage({ type: 'visibility', visible: !document.hidden });
+      };
+      document.addEventListener('visibilitychange', reportVisibility);
+      navigator.serviceWorker.ready.then(reportVisibility).catch(()=>{});
+
+      // Ask once for notification permission (silently — we never nag).
+      // The SW only fires a notification if the user previously granted.
+      if (window.Notification && Notification.permission === 'default') {
+        // Defer the prompt until the user actually starts a document — done
+        // by chat.html's own send flow; we intentionally do nothing here.
+      }
+    }).catch(()=>{});
   }
 
   let deferredPrompt = null;
