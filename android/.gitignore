@@ -96,8 +96,9 @@ capacitor-cordova-android-plugins
 app/src/main/assets/public
 
 # Generated Config files
-app/src/main/assets/capacitor.config.json
-app/src/main/assets/capacitor.plugins.json
+# capacitor.config.json + capacitor.plugins.json are intentionally
+# committed so GitHub Actions CI can build without needing cap sync
+# to regenerate them. config.xml is still safe to ignore.
 app/src/main/res/xml/config.xml
 
 # ── Signing secrets — never commit ──────────────────────────────────────
