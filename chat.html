@@ -2832,6 +2832,8 @@ async function send() {
         // Simple drafting spinner — proven from earlier working build
         if (isDocument) {
           _sDiv.innerHTML = '<div style="color:var(--accent);font-style:italic;padding:8px 0">📄 Drafting your legal document...</div>';
+          // Ask for notification permission the first time a doc is started
+          _requestNotifPermission();
         }
 
         // Track if the AI is asking for more details rather than generating
@@ -2921,6 +2923,9 @@ async function send() {
         if (isDocument && parsedText) {
           // Unified rendering — all roles, all paths use this one function
           await renderDocumentCard(_sDiv, parsedText, text, _ACTIONS);
+          // Notify if user minimised while waiting
+          const _docTitle = (parsedText.match(/^#+\s*(.+)/m) || [])[1] || 'Legal document';
+          _notifyDocReady(_docTitle.replace(/[*_#]/g, '').trim().slice(0, 60));
           busy = false;
           document.getElementById('sendBtn').disabled = false;
           return;
@@ -6429,9 +6434,58 @@ document.addEventListener('DOMContentLoaded', () => {
   </style>
 
   <script>
-  // ── SERVICE WORKER ──
+  // ── SERVICE WORKER + NOTIFICATIONS ──
+  // The SW (v3) handles static asset caching. We also use it here as a
+  // notification channel: when a document finishes streaming while the
+  // browser is hidden/minimised we fire a push-style notification via
+  // registration.showNotification() — this works even when the page is
+  // backgrounded because it goes through the SW process, not the page.
+  let _swReg = null;
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/sw.js').catch(()=>{});
+    navigator.serviceWorker.register('/sw.js')
+      .then(reg => { _swReg = reg; })
+      .catch(() => {});
+  }
+
+  // Request notification permission — called once, the first time the user
+  // actually starts a document. Gated by localStorage so we never re-prompt.
+  function _requestNotifPermission() {
+    if (!('Notification' in window)) return;
+    if (Notification.permission !== 'default') return;
+    if (localStorage.getItem('lbNotifAsked')) return;
+    localStorage.setItem('lbNotifAsked', '1');
+    Notification.requestPermission().catch(() => {});
+  }
+
+  // Fire a notification when a document completes while the page is hidden.
+  // Uses SW registration.showNotification() which works on backgrounded mobile
+  // pages; falls back to new Notification() for desktop.
+  async function _notifyDocReady(title) {
+    if (!('Notification' in window) || Notification.permission !== 'granted') return;
+    if (!document.hidden) return;  // user is watching — no need to notify
+    const opts = {
+      body: 'Tap to view your document in LegalBridge.',
+      icon: '/favicon.ico',
+      tag: 'lb-doc-ready',
+      renotify: true,
+    };
+    try {
+      if (_swReg) {
+        await _swReg.showNotification(title + ' — ready', opts);
+      } else {
+        new Notification(title + ' — ready', opts);
+      }
+    } catch (_) {}
+  }
+
+  // Listen for SW notification-click: SW posts a 'notification-focus' message
+  // to all clients so the tab comes to front without a full navigate.
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.addEventListener('message', e => {
+      if (e.data && e.data.type === 'notification-focus') {
+        try { window.focus(); } catch (_) {}
+      }
+    });
   }
 
   let deferredPrompt = null;

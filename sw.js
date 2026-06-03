@@ -20,6 +20,24 @@ self.addEventListener('activate', e => {
   );
 });
 
+// ── Notification click — bring the tab back to front ──────────────────
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  e.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(clients => {
+      // If a LegalBridge tab already exists, focus it and let it know
+      for (const c of clients) {
+        if (c.url && c.url.includes('legalbridge') && 'focus' in c) {
+          c.postMessage({ type: 'notification-focus' });
+          return c.focus();
+        }
+      }
+      // No tab open — open a new one
+      if (self.clients.openWindow) return self.clients.openWindow('/chat.html');
+    })
+  );
+});
+
 self.addEventListener('fetch', e => {
   const url = e.request.url;
 
