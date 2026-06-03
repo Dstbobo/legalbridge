@@ -1,0 +1,30 @@
+{
+  "name": "legalbridge",
+  "version": "1.0.0",
+  "description": "LegalBridge — Nigerian Legal AI Platform",
+  "main": "chat-api.js",
+  "scripts": {
+    "cap:add:android": "npx cap add android",
+    "cap:sync": "npx cap sync",
+    "cap:open:android": "npx cap open android",
+    "build:aab": "cd android && .gradlew bundleRelease"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Dstbobo/legalbridge.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/Dstbobo/legalbridge/issues"
+  },
+  "homepage": "https://github.com/Dstbobo/legalbridge#readme",
+  "dependencies": {
+    "@capacitor/android": "^8.4.0",
+    "@capacitor/cli": "^8.4.0",
+    "@capacitor/core": "^8.4.0"
+  },
+  "private": true
+}

@@ -1,0 +1,23 @@
+{
+  "appId": "ng.legalbridge.app",
+  "appName": "LegalBridge",
+  "webDir": "www",
+  "server": {
+    "url": "https://legalbridge.ng/chat.html",
+    "cleartext": false,
+    "androidScheme": "https"
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 2000,
+      "launchAutoHide": true,
+      "backgroundColor": "#0f1117",
+      "androidSplashResourceName": "splash",
+      "showSpinner": false
+    },
+    "StatusBar": {
+      "style": "DARK",
+      "backgroundColor": "#0f1117"
+    }
+  }
+}

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Network security config for LegalBridge Android app.
+  All traffic goes to legalbridge.ng and api.legalbridge.ng over HTTPS.
+  Cleartext (HTTP) is blocked entirely — Google Play requires this for
+  apps targeting API 28+.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <!-- Trust the system CA store (covers Let's Encrypt / Netlify certs) -->
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+
+    <!-- Explicitly pin our two domains — belt-and-suspenders against MITM -->
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="true">legalbridge.ng</domain>
+        <domain includeSubdomains="true">qcutjnsxiawnejiqwwix.supabase.co</domain>
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </domain-config>
+</network-security-config>

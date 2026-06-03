@@ -1,0 +1,100 @@
+apply plugin: 'com.android.application'
+
+android {
+    namespace = "ng.legalbridge.app"
+    compileSdk = rootProject.ext.compileSdkVersion
+
+    defaultConfig {
+        applicationId "ng.legalbridge.app"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        versionCode 1
+        versionName "1.0.0"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        aaptOptions {
+            ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+        }
+    }
+
+    // ── Signing ────────────────────────────────────────────────────────
+    // Release builds are signed with the keystore specified in
+    // android/keystore.properties (NOT committed to git).
+    // To create the keystore for the first time:
+    //
+    //   keytool -genkey -v \
+    //     -keystore android/release.keystore \
+    //     -alias legalbridge \
+    //     -keyalg RSA -keysize 2048 -validity 10000 \
+    //     -dname "CN=LegalBridge, OU=DST Global Innovative Nigeria Ltd, O=DST Global, L=Akwanga, S=Nasarawa, C=NG"
+    //
+    // Then create android/keystore.properties:
+    //   storeFile=release.keystore
+    //   storePassword=YOUR_STORE_PASSWORD
+    //   keyAlias=legalbridge
+    //   keyPassword=YOUR_KEY_PASSWORD
+    //
+    def keystorePropertiesFile = rootProject.file("keystore.properties")
+    def useSigningConfig = keystorePropertiesFile.exists()
+
+    if (useSigningConfig) {
+        def keystoreProperties = new Properties()
+        keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+        signingConfigs {
+            release {
+                storeFile     rootProject.file(keystoreProperties['storeFile'])
+                storePassword keystoreProperties['storePassword']
+                keyAlias      keystoreProperties['keyAlias']
+                keyPassword   keystoreProperties['keyPassword']
+            }
+        }
+    }
+
+    buildTypes {
+        debug {
+            debuggable true
+        }
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            if (useSigningConfig) {
+                signingConfig signingConfigs.release
+            }
+        }
+    }
+
+    // Required for AAB submission to Google Play
+    bundle {
+        language { enableSplit = true  }
+        density  { enableSplit = true  }
+        abi      { enableSplit = true  }
+    }
+}
+
+repositories {
+    flatDir {
+        dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+    implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
+    implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
+    implementation project(':capacitor-android')
+    testImplementation "junit:junit:$junitVersion"
+    androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
+    androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
+    implementation project(':capacitor-cordova-android-plugins')
+}
+
+apply from: 'capacitor.build.gradle'
+
+try {
+    def servicesJSON = file('google-services.json')
+    if (servicesJSON.text) {
+        apply plugin: 'com.google.gms.google-services'
+    }
+} catch(Exception e) {
+    logger.info("google-services.json not found, google-services plugin not applied.")
+}
