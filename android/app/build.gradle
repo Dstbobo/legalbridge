@@ -17,37 +17,28 @@ android {
     }
 
     // ── Signing ────────────────────────────────────────────────────────
-    // Release builds are signed with the keystore specified in
-    // android/keystore.properties (NOT committed to git).
-    // To create the keystore for the first time:
+    // Credentials are injected by CI via Android Gradle Plugin standard
+    // properties (android.injected.signing.*) passed as -P flags on the
+    // Gradle command line. No keystore.properties file is used — this
+    // avoids every quoting / character-escaping problem that .properties
+    // files cause with passwords containing special characters (!@#$ etc).
     //
-    //   keytool -genkey -v \
-    //     -keystore android/release.keystore \
-    //     -alias legalbridge \
-    //     -keyalg RSA -keysize 2048 -validity 10000 \
-    //     -dname "CN=LegalBridge, OU=DST Global Innovative Nigeria Ltd, O=DST Global, L=Akwanga, S=Nasarawa, C=NG"
+    // For local builds, set the four properties in your personal
+    // ~/.gradle/gradle.properties file (never commit that file):
     //
-    // Then create android/keystore.properties:
-    //   storeFile=release.keystore
-    //   storePassword=YOUR_STORE_PASSWORD
-    //   keyAlias=legalbridge
-    //   keyPassword=YOUR_KEY_PASSWORD
+    //   LEGALBRIDGE_STORE_FILE=/absolute/path/to/release.keystore
+    //   LEGALBRIDGE_STORE_PASS=YourPassword
+    //   LEGALBRIDGE_KEY_ALIAS=legalbridge
+    //   LEGALBRIDGE_KEY_PASS=YourPassword
     //
-    def keystorePropertiesFile = rootProject.file("keystore.properties")
-    def useSigningConfig = keystorePropertiesFile.exists()
-
-    if (useSigningConfig) {
-        def keystoreProperties = new Properties()
-        keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
-        signingConfigs {
-            release {
-                storeFile     rootProject.file(keystoreProperties['storeFile'])
-                storePassword keystoreProperties['storePassword']
-                keyAlias      keystoreProperties['keyAlias']
-                keyPassword   keystoreProperties['keyPassword']
-            }
-        }
-    }
+    // Then build with:
+    //   ./gradlew bundleRelease \
+    //     -Pandroid.injected.signing.store.file=$LEGALBRIDGE_STORE_FILE \
+    //     -Pandroid.injected.signing.store.password=$LEGALBRIDGE_STORE_PASS \
+    //     -Pandroid.injected.signing.key.alias=$LEGALBRIDGE_KEY_ALIAS \
+    //     -Pandroid.injected.signing.key.password=$LEGALBRIDGE_KEY_PASS
+    //
+    // CI passes these automatically — see .github/workflows/build-aab.yml.
 
     buildTypes {
         debug {
@@ -56,17 +47,14 @@ android {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
-            if (useSigningConfig) {
-                signingConfig signingConfigs.release
-            }
         }
     }
 
     // Required for AAB submission to Google Play
     bundle {
-        language { enableSplit = true  }
-        density  { enableSplit = true  }
-        abi      { enableSplit = true  }
+        language { enableSplit = true }
+        density  { enableSplit = true }
+        abi      { enableSplit = true }
     }
 }
 

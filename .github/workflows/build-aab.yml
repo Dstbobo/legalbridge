@@ -63,54 +63,30 @@ jobs:
         run: npx cap sync android
 
       # ── Signing keystore ──────────────────────────────────────────
+      # We use Android Gradle Plugin's injected signing properties
+      # (-Pandroid.injected.signing.*) rather than a keystore.properties
+      # file. This avoids every quoting / Java-Properties-escaping issue
+      # that special characters in passwords (! @ # etc.) can cause.
+      # The keystore is decoded here; passwords stay as env vars and are
+      # passed directly to Gradle on the command line below.
       - name: Decode release keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-          STORE_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_PASS: ${{ secrets.KEY_PASSWORD }}
         run: |
           if [ -z "$KEYSTORE_BASE64" ]; then
             echo "::error::Secret KEYSTORE_BASE64 is not set."
-            echo "::error::Run the 'Generate Release Keystore' workflow first,"
-            echo "::error::then add the output as a GitHub secret."
+            echo "::error::Run the 'Generate Release Keystore' workflow first."
             exit 1
           fi
-
-          # Strip any whitespace/newlines that may have crept in when the
-          # secret was copy-pasted (the most common cause of BadPaddingException)
+          # tr -d strips any whitespace/newlines introduced during copy-paste
           echo "$KEYSTORE_BASE64" | tr -d '[:space:]' | base64 --decode > android/release.keystore
           BYTES=$(wc -c < android/release.keystore)
-          echo "✅ Keystore decoded: ${BYTES} bytes"
-
+          echo "Keystore size: ${BYTES} bytes"
           if [ "$BYTES" -lt 100 ]; then
-            echo "::error::Keystore file is too small (${BYTES} bytes) — KEYSTORE_BASE64 secret may be corrupted."
+            echo "::error::Decoded keystore is ${BYTES} bytes — KEYSTORE_BASE64 is likely corrupted."
             exit 1
           fi
-
-          # Verify the keystore password is correct BEFORE handing off to
-          # Gradle — keytool exits non-zero if the password is wrong, giving
-          # a clear error here rather than a cryptic BadPaddingException later.
-          keytool -list \
-            -keystore android/release.keystore \
-            -storepass "${STORE_PASS}" \
-            -alias legalbridge \
-            -noprompt 2>&1 | tee /tmp/keytool_check.txt
-          if grep -qi "error\|exception\|incorrect\|failed\|invalid" /tmp/keytool_check.txt; then
-            echo "::error::Keystore verification failed. KEYSTORE_PASSWORD may not match the keystore."
-            echo "::error::Re-run the 'Generate Release Keystore' workflow and update KEYSTORE_BASE64."
-            exit 1
-          fi
-          echo "✅ Keystore password verified"
-
-      - name: Write keystore.properties
-        run: |
-          # Use printf to avoid here-doc indentation issues that can add
-          # leading spaces to the property values and corrupt the passwords.
-          printf 'storeFile=release.keystore\nstorePassword=%s\nkeyAlias=legalbridge\nkeyPassword=%s\n' \
-            '${{ secrets.KEYSTORE_PASSWORD }}' \
-            '${{ secrets.KEY_PASSWORD }}' \
-            > android/keystore.properties
-          echo "✅ keystore.properties written"
+          echo "✅ Keystore decoded successfully"
 
       # ── Gradle build ──────────────────────────────────────────────
       - name: Make gradlew executable
@@ -118,12 +94,22 @@ jobs:
 
       - name: Build release AAB
         working-directory: android
-        run: ./gradlew bundleRelease --no-daemon --stacktrace
+        # Pass signing credentials as AGP injected properties — this is the
+        # standard CI pattern and avoids every .properties file quoting issue.
+        # Passwords are passed via env vars (never interpolated directly into
+        # the shell command string) so special characters like ! are safe.
         env:
-          # Tell Gradle where the Android SDK is on the runner.
-          # ubuntu-latest has the SDK pre-installed at this path.
           ANDROID_HOME: /usr/local/lib/android/sdk
           ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+          STORE_FILE: ${{ github.workspace }}/android/release.keystore
+          STORE_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_PASS:   ${{ secrets.KEY_PASSWORD }}
+        run: |
+          ./gradlew bundleRelease --no-daemon \
+            "-Pandroid.injected.signing.store.file=${STORE_FILE}" \
+            "-Pandroid.injected.signing.store.password=${STORE_PASS}" \
+            "-Pandroid.injected.signing.key.alias=legalbridge" \
+            "-Pandroid.injected.signing.key.password=${KEY_PASS}"
 
       # ── Derive version name for the artifact filename ──────────────
       - name: Get version name
