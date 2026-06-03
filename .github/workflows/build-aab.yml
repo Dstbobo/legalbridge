@@ -73,14 +73,13 @@ jobs:
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
           STORE_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_PASS:   ${{ secrets.KEY_PASSWORD }}
         run: |
           if [ -z "$KEYSTORE_BASE64" ]; then
             echo "::error::KEYSTORE_BASE64 secret is not set. Run 'Generate Release Keystore' first."
             exit 1
           fi
 
-          # Decode (strip whitespace to survive copy-paste line-wrapping)
+          # Decode — tr -d strips whitespace introduced by copy-paste line-wrapping
           echo "$KEYSTORE_BASE64" | tr -d '[:space:]' | base64 --decode > android/release.keystore
           BYTES=$(wc -c < android/release.keystore)
           echo "Keystore size: ${BYTES} bytes"
@@ -89,41 +88,33 @@ jobs:
             exit 1
           fi
 
-          # --- Verify store password ---
+          # Verify store password
           if keytool -list \
                -keystore android/release.keystore \
                -storepass "${STORE_PASS}" \
                -noprompt > /dev/null 2>&1; then
-            echo "✅ Store password (KEYSTORE_PASSWORD) is correct"
+            echo "✅ KEYSTORE_PASSWORD is correct"
           else
             echo "::error::KEYSTORE_PASSWORD does not match the keystore."
-            echo "::error::Re-run 'Generate Release Keystore' workflow and update KEYSTORE_BASE64."
+            echo "::error::Re-run 'Generate Release Keystore' and update KEYSTORE_BASE64."
             exit 1
           fi
 
-          # --- Verify key password by exporting the certificate (needs key access) ---
-          if keytool -exportcert \
+          # Verify key password — in PKCS12 (Java 9+ default) the key password
+          # is ALWAYS equal to the store password regardless of what -keypass
+          # was passed to keytool. We verify by attempting a no-op password change.
+          if keytool -keypasswd \
                -keystore android/release.keystore \
-               -storepass "${STORE_PASS}" \
                -alias legalbridge \
+               -storepass "${STORE_PASS}" \
+               -keypass "${STORE_PASS}" \
+               -new "${STORE_PASS}" \
                -noprompt > /dev/null 2>&1; then
-            # exportcert works with store password on PKCS12; now verify key password
-            # by attempting a key password change to itself (no-op if correct)
-            if keytool -keypasswd \
-                 -keystore android/release.keystore \
-                 -alias legalbridge \
-                 -storepass "${STORE_PASS}" \
-                 -keypass "${KEY_PASS}" \
-                 -new "${KEY_PASS}" \
-                 -noprompt > /dev/null 2>&1; then
-              echo "✅ Key password (KEY_PASSWORD) is correct"
-            else
-              echo "::error::KEY_PASSWORD does not match the key in the keystore."
-              echo "::error::This is the most common cause of 'BadPaddingException' in Gradle."
-              echo "::error::Fix: re-run 'Generate Release Keystore' workflow, download the"
-              echo "::error::new artifact, and update the KEYSTORE_BASE64 secret."
-              exit 1
-            fi
+            echo "✅ Key password verified (equals KEYSTORE_PASSWORD as expected for PKCS12)"
+          else
+            echo "::error::Key password check failed — keystore may be corrupted."
+            echo "::error::Re-run 'Generate Release Keystore' and update KEYSTORE_BASE64."
+            exit 1
           fi
 
       # ── Gradle build ──────────────────────────────────────────────
@@ -132,22 +123,21 @@ jobs:
 
       - name: Build release AAB
         working-directory: android
-        # Pass signing credentials as AGP injected properties — this is the
-        # standard CI pattern and avoids every .properties file quoting issue.
-        # Passwords are passed via env vars (never interpolated directly into
-        # the shell command string) so special characters like ! are safe.
+        # Pass signing credentials as AGP injected properties — standard CI pattern.
+        # PKCS12 note: in Java 9+ the key password always equals the store password
+        # (PKCS12 does not support separate passwords). We pass KEYSTORE_PASSWORD
+        # for both store.password and key.password to match what keytool wrote.
         env:
           ANDROID_HOME: /usr/local/lib/android/sdk
           ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
           STORE_FILE: ${{ github.workspace }}/android/release.keystore
           STORE_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_PASS:   ${{ secrets.KEY_PASSWORD }}
         run: |
           ./gradlew bundleRelease --no-daemon \
             "-Pandroid.injected.signing.store.file=${STORE_FILE}" \
             "-Pandroid.injected.signing.store.password=${STORE_PASS}" \
             "-Pandroid.injected.signing.key.alias=legalbridge" \
-            "-Pandroid.injected.signing.key.password=${KEY_PASS}"
+            "-Pandroid.injected.signing.key.password=${STORE_PASS}"
 
       # ── Derive version name for the artifact filename ──────────────
       - name: Get version name
