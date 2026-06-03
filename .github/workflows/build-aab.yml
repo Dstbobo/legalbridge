@@ -69,24 +69,62 @@ jobs:
       # that special characters in passwords (! @ # etc.) can cause.
       # The keystore is decoded here; passwords stay as env vars and are
       # passed directly to Gradle on the command line below.
-      - name: Decode release keystore
+      - name: Decode and verify keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          STORE_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_PASS:   ${{ secrets.KEY_PASSWORD }}
         run: |
           if [ -z "$KEYSTORE_BASE64" ]; then
-            echo "::error::Secret KEYSTORE_BASE64 is not set."
-            echo "::error::Run the 'Generate Release Keystore' workflow first."
+            echo "::error::KEYSTORE_BASE64 secret is not set. Run 'Generate Release Keystore' first."
             exit 1
           fi
-          # tr -d strips any whitespace/newlines introduced during copy-paste
+
+          # Decode (strip whitespace to survive copy-paste line-wrapping)
           echo "$KEYSTORE_BASE64" | tr -d '[:space:]' | base64 --decode > android/release.keystore
           BYTES=$(wc -c < android/release.keystore)
           echo "Keystore size: ${BYTES} bytes"
           if [ "$BYTES" -lt 100 ]; then
-            echo "::error::Decoded keystore is ${BYTES} bytes — KEYSTORE_BASE64 is likely corrupted."
+            echo "::error::Decoded keystore is ${BYTES} bytes — KEYSTORE_BASE64 is corrupted."
             exit 1
           fi
-          echo "✅ Keystore decoded successfully"
+
+          # --- Verify store password ---
+          if keytool -list \
+               -keystore android/release.keystore \
+               -storepass "${STORE_PASS}" \
+               -noprompt > /dev/null 2>&1; then
+            echo "✅ Store password (KEYSTORE_PASSWORD) is correct"
+          else
+            echo "::error::KEYSTORE_PASSWORD does not match the keystore."
+            echo "::error::Re-run 'Generate Release Keystore' workflow and update KEYSTORE_BASE64."
+            exit 1
+          fi
+
+          # --- Verify key password by exporting the certificate (needs key access) ---
+          if keytool -exportcert \
+               -keystore android/release.keystore \
+               -storepass "${STORE_PASS}" \
+               -alias legalbridge \
+               -noprompt > /dev/null 2>&1; then
+            # exportcert works with store password on PKCS12; now verify key password
+            # by attempting a key password change to itself (no-op if correct)
+            if keytool -keypasswd \
+                 -keystore android/release.keystore \
+                 -alias legalbridge \
+                 -storepass "${STORE_PASS}" \
+                 -keypass "${KEY_PASS}" \
+                 -new "${KEY_PASS}" \
+                 -noprompt > /dev/null 2>&1; then
+              echo "✅ Key password (KEY_PASSWORD) is correct"
+            else
+              echo "::error::KEY_PASSWORD does not match the key in the keystore."
+              echo "::error::This is the most common cause of 'BadPaddingException' in Gradle."
+              echo "::error::Fix: re-run 'Generate Release Keystore' workflow, download the"
+              echo "::error::new artifact, and update the KEYSTORE_BASE64 secret."
+              exit 1
+            fi
+          fi
 
       # ── Gradle build ──────────────────────────────────────────────
       - name: Make gradlew executable
