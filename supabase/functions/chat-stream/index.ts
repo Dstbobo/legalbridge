@@ -50,6 +50,14 @@ CRITICAL IDENTITY RULES — NEVER VIOLATE:
 - If asked what AI you use, say: "I use proprietary AI technology specifically designed for Nigerian legal practice."
 `;
 
+const DOC_RULE = `
+
+DOCUMENT GENERATION RULE (CRITICAL — applies to ALL responses):
+- NEVER generate or begin drafting a legal document unless the user has explicitly requested one using words like "draft", "write", "create", "generate", or "prepare a document/letter/agreement".
+- When a user describes a legal problem or situation, provide legal advice, guidance, and information only — no automatic document generation.
+- If you believe a document would help, suggest it as a polite question: e.g. "Would you like me to draft a demand letter to your landlord?" — and only proceed if the user says yes.
+- Describing a legal problem is NOT a request for a document.`;
+
 const PERSONAS: Record<string, string> = {
   lawyer: IDENTITY + `You are LegalBridge AI — a highly intelligent Nigerian legal assistant and trusted colleague.
 
@@ -68,7 +76,7 @@ When the user asks for substantive legal reasoning, strategy, interpretation, ca
 NEVER:
 - Break conversation flow with mode announcements
 - Forget context from earlier in the conversation
-- Be robotic or formal when the user is being casual`,
+- Be robotic or formal when the user is being casual` + DOC_RULE,
 
   student: IDENTITY + `You are LegalBridge AI — a smart, encouraging Nigerian legal study companion.
 
@@ -81,7 +89,7 @@ CONVERSATION STYLE:
 - When they ask legal questions, shift into educational mode naturally — use IRAC, explain principles, cite cases
 - Encourage and motivate when they seem stressed
 
-NEVER break conversation flow with mode announcements.`,
+NEVER break conversation flow with mode announcements.` + DOC_RULE,
 
   business: IDENTITY + `You are LegalBridge AI — a sharp, practical Nigerian business legal advisor.
 
@@ -94,7 +102,7 @@ CONVERSATION STYLE:
 - When they ask about legal/compliance issues, shift naturally into advisory mode
 - Always connect legal issues to practical business impact
 
-NEVER break conversation flow with mode announcements.`,
+NEVER break conversation flow with mode announcements.` + DOC_RULE,
 
   journalist: IDENTITY + `You are LegalBridge AI — a knowledgeable Nigerian press law advisor and trusted resource.
 
@@ -105,7 +113,7 @@ CONVERSATION STYLE:
 - When casual, respond conversationally
 - When they ask about legal exposure, FOI, defamation — shift naturally into press law advisory mode
 
-NEVER break conversation flow with mode announcements.`,
+NEVER break conversation flow with mode announcements.` + DOC_RULE,
 
   individual: IDENTITY + `You are LegalBridge AI — a warm, helpful Nigerian legal assistant.
 
@@ -118,7 +126,7 @@ CONVERSATION STYLE:
 - Never use legal jargon without explaining it
 - Always make them feel heard and supported
 
-NEVER break conversation flow with mode announcements.`,
+NEVER break conversation flow with mode announcements.` + DOC_RULE,
 
   other: IDENTITY + `You are LegalBridge AI — a warm, helpful Nigerian legal assistant.
 
@@ -131,7 +139,7 @@ CONVERSATION STYLE:
 - Never use legal jargon without explaining it
 - Always make them feel heard and supported
 
-NEVER break conversation flow with mode announcements.`,
+NEVER break conversation flow with mode announcements.` + DOC_RULE,
 };
 
 // ════════════════════════════════════════════════════════════════════
@@ -147,15 +155,16 @@ function detectIntent(message: string, hasImages: boolean, history: any[] = []):
 
   const m = message.toLowerCase().trim();
 
-  // Context-aware document continuation
+  // Context-aware document continuation — only when AI explicitly asked for details
+  // or offered to draft and the user confirmed. A numbered list mentioning legal
+  // parties is NOT sufficient: that is legal advice, not a draft offer.
   const lastAssistant = [...history].reverse().find((h: any) => h.role === 'assistant');
   if (lastAssistant) {
     const a = (lastAssistant.content || '').slice(0, 1200);
-    const askedForDetails =
-      /NEED_DETAILS\s*:/i.test(a) ||
-      (/\bI can draft\b.*\b(please provide|need .* details)/is.test(a)) ||
-      (/^\s*\d+\.\s+/m.test(a) && /\b(landlord|tenant|deponent|petitioner|respondent|address|amount|rent|name|full name|date|signature)\b/i.test(a));
-    if (askedForDetails && m.length > 5) return 'documents';
+    const aiAskedNeedDetails = /NEED_DETAILS\s*:/i.test(a);
+    const aiOfferedToDraft = /\b(would you like me to draft|shall I draft|I can draft|I can prepare|want me to draft|want me to prepare|I could draft|like me to prepare|should I draft|can I draft)\b/i.test(a);
+    const userConfirmed = /\b(yes|sure|go ahead|please do|do it|draft it|okay|yes please|absolutely|of course|alright|proceed|sounds good|that would be (great|helpful)|i'?d like that|please draft|please prepare|please write)\b/i.test(m);
+    if ((aiAskedNeedDetails || (aiOfferedToDraft && userConfirmed)) && m.length > 2) return 'documents';
   }
 
   // Document drafting (checked FIRST, very permissive)
