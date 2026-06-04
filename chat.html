@@ -571,23 +571,7 @@
     }
     .plus-btn:hover { background: rgba(255,255,255,0.1); color: var(--white); }
 
-    .send-btn {
-      width: 34px; height: 34px;
-      border-radius: 50%;
-      background: transparent;
-      border: none;
-      cursor: pointer;
-      display: flex; align-items: center; justify-content: center;
-      color: rgba(255,255,255,0.25);
-      transition: color 0.2s, transform 0.1s;
-      flex-shrink: 0;
-    }
-    .send-btn.active { color: var(--accent); }
-    .send-btn:hover.active { color: #74aeff; }
-    .send-btn:active { transform: scale(0.9); }
-    .send-btn:disabled { color: rgba(255,255,255,0.15); cursor: not-allowed; }
-    .send-btn svg { width: 18px; height: 18px; }
-
+    /* ── INPUT FIELD ── */
     .claude-input-field {
       width: 100%;
       display: block;
@@ -607,6 +591,7 @@
     }
     .claude-input-field::placeholder { color: var(--text-tertiary); }
 
+    /* ── RIGHT-SIDE BUTTON CLUSTER ── */
     .claude-right-actions {
       display: flex;
       align-items: center;
@@ -615,6 +600,7 @@
       margin-bottom: 1px;
     }
 
+    /* Mic icon button — shown when input is empty & idle */
     .mic-btn {
       width: 34px; height: 34px;
       border-radius: 50%;
@@ -624,8 +610,54 @@
       cursor: pointer;
       display: flex; align-items: center; justify-content: center;
       transition: color 0.15s;
+      flex-shrink: 0;
     }
     .mic-btn:hover { color: var(--text-secondary); }
+
+    /* Audio-wave button — black filled circle, shown when input is empty & idle */
+    .wave-btn {
+      width: 34px; height: 34px;
+      border-radius: 50%;
+      background: #fff;
+      border: none;
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+      transition: transform 0.1s, background 0.15s;
+    }
+    .wave-btn:hover { background: #e0e0e0; }
+    .wave-btn:active { transform: scale(0.92); }
+    .wave-btn svg { color: #111; }
+
+    /* Send (↑ arrow) button — shown when user has typed text */
+    .send-btn {
+      width: 34px; height: 34px;
+      border-radius: 50%;
+      background: #fff;
+      border: none;
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+      transition: transform 0.1s, background 0.15s;
+    }
+    .send-btn:hover { background: #e0e0e0; }
+    .send-btn:active { transform: scale(0.92); }
+    .send-btn svg { color: #111; }
+
+    /* Stop (■) button — shown while AI is generating */
+    .stop-btn {
+      width: 34px; height: 34px;
+      border-radius: 50%;
+      background: #fff;
+      border: none;
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+      transition: transform 0.1s, background 0.15s;
+    }
+    .stop-btn:hover { background: #e0e0e0; }
+    .stop-btn:active { transform: scale(0.92); }
+    .stop-btn svg { color: #111; }
 
 
     /* ── PLUS MENU ── */
@@ -2029,12 +2061,33 @@
             oninput="grow(this)"
           ></textarea>
         </div>
-        <div class="claude-right-actions">
+        <div class="claude-right-actions" id="rightActions">
+          <!-- STATE: idle-empty — mic + audio-wave -->
           <button class="mic-btn" id="micBtn" title="Voice input" onclick="toggleVoice()">
             <svg width="17" height="17" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M19 10v2a7 7 0 01-14 0v-2M12 19v4M8 23h8"/></svg>
           </button>
-          <button class="send-btn" id="sendBtn" onclick="send()">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+          <button class="wave-btn" id="waveBtn" title="Audio message" onclick="toggleVoice()">
+            <!-- Audio waveform bars — same visual language as Claude app -->
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" color="#111">
+              <line x1="4"  y1="9"  x2="4"  y2="15"/>
+              <line x1="8"  y1="5"  x2="8"  y2="19"/>
+              <line x1="12" y1="7"  x2="12" y2="17"/>
+              <line x1="16" y1="5"  x2="16" y2="19"/>
+              <line x1="20" y1="9"  x2="20" y2="15"/>
+            </svg>
+          </button>
+          <!-- STATE: idle-typing — arrow send -->
+          <button class="send-btn" id="sendBtn" title="Send" onclick="send()" style="display:none">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" color="#111">
+              <line x1="12" y1="19" x2="12" y2="5"/>
+              <polyline points="5 12 12 5 19 12"/>
+            </svg>
+          </button>
+          <!-- STATE: generating — stop square -->
+          <button class="stop-btn" id="stopBtn" title="Stop generating" onclick="stopGeneration()" style="display:none">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="#111">
+              <rect x="0" y="0" width="12" height="12" rx="2"/>
+            </svg>
           </button>
         </div>
       </div>
@@ -2238,6 +2291,45 @@ Remember: Answer fully first. Warn at the end. The lawyer decides.`;
 // ── STATE ──
 let history = [];
 let busy = false;
+let _streamAbort = null; // AbortController for the current SSE fetch
+
+// ── INPUT BUTTON STATE MACHINE ──
+// Three states:
+//   'idle-empty'   → mic icon + audio-wave button (default, no text typed)
+//   'idle-typing'  → single ↑ arrow send button (text present)
+//   'generating'   → single ■ stop button (AI is streaming)
+function updateInputButtons(state) {
+  const micBtn  = document.getElementById('micBtn');
+  const waveBtn = document.getElementById('waveBtn');
+  const sendBtn = document.getElementById('sendBtn');
+  const stopBtn = document.getElementById('stopBtn');
+  if (!micBtn || !waveBtn || !sendBtn || !stopBtn) return;
+  // Hide all, then show the right ones
+  micBtn.style.display  = 'none';
+  waveBtn.style.display = 'none';
+  sendBtn.style.display = 'none';
+  stopBtn.style.display = 'none';
+  if (state === 'idle-empty') {
+    micBtn.style.display  = 'flex';
+    waveBtn.style.display = 'flex';
+  } else if (state === 'idle-typing') {
+    sendBtn.style.display = 'flex';
+  } else if (state === 'generating') {
+    stopBtn.style.display = 'flex';
+  }
+}
+
+// Stop the current generation — aborts the fetch and resets UI
+function stopGeneration() {
+  if (_streamAbort) { _streamAbort.abort(); _streamAbort = null; }
+  busy = false;
+  // Remove the typing indicator if it's still showing
+  const typing = document.querySelector('.typing-row');
+  if (typing) typing.remove();
+  // Return to idle-empty or idle-typing depending on input content
+  const field = document.getElementById('inputField');
+  updateInputButtons(field && field.value.trim() ? 'idle-typing' : 'idle-empty');
+}
 
 // ── DEMO DATA ──
 const demos = {
@@ -2374,16 +2466,17 @@ function detect(text) {
 // ── HELPERS ──
 function grow(el) {
   // Set to 0 first — this forces scrollHeight to reflect actual content height
-  // (height:auto inside a flex column gives wrong scrollHeight)
   el.style.height = '0px';
   const newHeight = Math.min(el.scrollHeight, 200);
   el.style.height = newHeight + 'px';
   // Switch from pill to rounded-rect when multiline, back to pill when single line
   const bar = el.closest('.claude-input-bar');
   if (bar) bar.style.borderRadius = newHeight > 44 ? '20px' : '9999px';
-  // Light up send button when user is typing
-  const btn = document.getElementById('sendBtn');
-  if (btn) btn.classList.toggle('active', el.value.trim().length > 0);
+  // Switch button state: typing shows arrow, empty shows mic+wave
+  // Don't change buttons while AI is generating
+  if (!busy) {
+    updateInputButtons(el.value.trim().length > 0 ? 'idle-typing' : 'idle-empty');
+  }
 }
 
 function handleKey(e) {
@@ -2517,7 +2610,7 @@ window.draftDocument = async function(docType) {
   if (busy) { busy = false; } // force reset if stuck
 
   busy = true;
-  document.getElementById('sendBtn').disabled = true;
+  updateInputButtons('generating');
 
   try {
     const prompt = `Based on the case we have been discussing, please draft a complete and properly formatted Nigerian ${docType}. Use all the facts, parties, and legal issues already established in this conversation. Format it as a proper legal document with correct headings, numbered paragraphs, and signature/jurat blocks as appropriate. End with a note that it must be reviewed and executed by the supervising lawyer.`;
@@ -2565,7 +2658,7 @@ window.draftDocument = async function(docType) {
     addAI('<p style="color:#e8908a">⚠ Could not draft document: ' + err.message + '</p>');
   } finally {
     busy = false;
-    document.getElementById('sendBtn').disabled = false;
+    _streamAbort = null; updateInputButtons(document.getElementById('inputField')?.value?.trim() ? 'idle-typing' : 'idle-empty');
   }
 }
 
@@ -2622,7 +2715,7 @@ async function regenerateMsg(btn) {
     addAI('<p style="color:#e8908a">⚠ ERROR: ' + err.message + '</p>');
   } finally {
     busy = false;
-    document.getElementById('sendBtn').disabled = false;
+    _streamAbort = null; updateInputButtons(document.getElementById('inputField')?.value?.trim() ? 'idle-typing' : 'idle-empty');
   }
 }
 
@@ -2639,8 +2732,8 @@ async function send() {
   // Reset bar back to pill shape after sending
   const bar = field.closest('.claude-input-bar');
   if (bar) bar.style.borderRadius = '9999px';
-  const btn = document.getElementById('sendBtn');
-  if (btn) btn.classList.remove('active');
+  // Show stop button while generating
+  updateInputButtons('generating');
 
   // Capture and clear queued images
   const imagesToSend = [...queuedImages];
@@ -2670,7 +2763,7 @@ async function send() {
   }
 
   busy = true;
-  document.getElementById('sendBtn').disabled = true;
+  updateInputButtons('generating');
 
   if (history.length === 0 && text) {
     const t = text.length > 40 ? text.slice(0,40) + '…' : text;
@@ -2761,7 +2854,7 @@ async function send() {
       addAI('<p style="color:#e8908a">⚠ ' + err.message + '</p>');
     } finally {
       busy = false;
-      document.getElementById('sendBtn').disabled = false;
+      _streamAbort = null; updateInputButtons(document.getElementById('inputField')?.value?.trim() ? 'idle-typing' : 'idle-empty');
     }
     return;
   }
@@ -2784,8 +2877,10 @@ async function send() {
 
       // ── EDGE FUNCTION CALL (key stays server-side) ──
       const { data: { session } } = await sb.auth.getSession();
+      _streamAbort = new AbortController();
       const res = await fetch(EDGE_URL, {
         method: 'POST',
+        signal: _streamAbort.signal,
         headers: {
           'Content-Type': 'application/json',
           'apikey': SUPABASE_ANON_KEY,
@@ -2908,7 +3003,7 @@ async function send() {
           history.push({ role: 'assistant', content: reply });
           saveTurn(text, reply).catch(() => {});
           busy = false;
-          document.getElementById('sendBtn').disabled = false;
+          _streamAbort = null; updateInputButtons(document.getElementById('inputField')?.value?.trim() ? 'idle-typing' : 'idle-empty');
           return;
         }
 
@@ -2927,7 +3022,7 @@ async function send() {
           const _docTitle = (parsedText.match(/^#+\s*(.+)/m) || [])[1] || 'Legal document';
           _notifyDocReady(_docTitle.replace(/[*_#]/g, '').trim().slice(0, 60));
           busy = false;
-          document.getElementById('sendBtn').disabled = false;
+          _streamAbort = null; updateInputButtons(document.getElementById('inputField')?.value?.trim() ? 'idle-typing' : 'idle-empty');
           return;
         }
 
@@ -2936,7 +3031,7 @@ async function send() {
         history.push({ role: 'assistant', content: reply });
         if (reply) saveTurn(text, reply).catch(() => {});
         busy = false;
-        document.getElementById('sendBtn').disabled = false;
+        _streamAbort = null; updateInputButtons(document.getElementById('inputField')?.value?.trim() ? 'idle-typing' : 'idle-empty');
         return;
       }
 
@@ -2983,21 +3078,23 @@ async function send() {
           scrollDown();
           history.push({ role: 'assistant', content: reply });
           busy = false;
-          document.getElementById('sendBtn').disabled = false;
+          _streamAbort = null; updateInputButtons(document.getElementById('inputField')?.value?.trim() ? 'idle-typing' : 'idle-empty');
         }
       }, 35);
       return;
 
     } catch(err) {
       removeTyping();
-      console.error('LegalBridge error:', err);
-      addAI('<p style="color:#e8908a">⚠ ERROR: ' + err.message + '</p>');
-
+      // AbortError means the user pressed stop — not an error, just silently stop
+      if (err.name !== 'AbortError') {
+        console.error('LegalBridge error:', err);
+        addAI('<p style="color:#e8908a">⚠ ERROR: ' + err.message + '</p>');
+      }
     }
   }
 
   busy = false;
-  document.getElementById('sendBtn').disabled = false;
+  _streamAbort = null; updateInputButtons(document.getElementById('inputField')?.value?.trim() ? 'idle-typing' : 'idle-empty');
 }
 
 
@@ -4431,7 +4528,7 @@ async function startDocumentFlow(docType, fullUserText) {
   history.push({ role: 'user', content: userMsg });
   showTyping(userMsg);
   busy = true;
-  document.getElementById('sendBtn').disabled = true;
+  updateInputButtons('generating');
 
   // Create chat record early so sidebar updates before streaming finishes
   if (!currentChatId && currentUser && !savingChat) {
@@ -4547,7 +4644,7 @@ async function startDocumentFlow(docType, fullUserText) {
     addAI('<p style="color:#e8908a">⚠ ' + err.message + '</p>');
   } finally {
     busy = false;
-    document.getElementById('sendBtn').disabled = false;
+    _streamAbort = null; updateInputButtons(document.getElementById('inputField')?.value?.trim() ? 'idle-typing' : 'idle-empty');
   }
 }
 
@@ -4569,7 +4666,7 @@ Use inline styles for formatting (no external CSS). Black text only. Professiona
 
   showTyping(text);
   busy = true;
-  document.getElementById('sendBtn').disabled = true;
+  updateInputButtons('generating');
 
   try {
     const { data: { session } } = await sb.auth.getSession();
@@ -4616,7 +4713,7 @@ Use inline styles for formatting (no external CSS). Black text only. Professiona
     addAI('<p style="color:#e8908a">⚠ Could not generate document: ' + err.message + '</p>');
   } finally {
     busy = false;
-    document.getElementById('sendBtn').disabled = false;
+    _streamAbort = null; updateInputButtons(document.getElementById('inputField')?.value?.trim() ? 'idle-typing' : 'idle-empty');
   }
 }
 
@@ -6262,6 +6359,8 @@ async function signOut() {
 // ── INIT ──
 document.addEventListener('DOMContentLoaded', () => {
   initApp();
+  // Set the initial button state — mic + wave (empty input, idle)
+  updateInputButtons('idle-empty');
 });
 </script>
 
