@@ -1,16 +1,23 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View, FlatList, StyleSheet, Text, TextInput,
   TouchableOpacity, Platform, Alert, Modal, Pressable, ScrollView,
+  Keyboard, Animated,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import Markdown from 'react-native-markdown-display';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useChatStore, type Message } from '@/stores/chat.store';
 import { useAuthStore } from '@/stores/auth.store';
-import { streamChat, streamDocument } from '@/services/chat.service';
-import { isLegalPro } from '@/constants/roles';
+import { streamChat } from '@/services/chat.service';
+import { Image } from 'react-native';
+import { isLawyer, isLawStudent, type UserRole } from '@/constants/roles';
+import DiscoveryScreen from './discovery';
+import ClientsScreen from './clients';
+
+const LB_LOGO = require('@/assets/logo.png');
 import { COLORS } from '@/constants/theme';
 
 // ── Markdown styles ───────────────────────────────────────────────────────
@@ -50,7 +57,80 @@ const mdStyles = {
   hr: { backgroundColor: COLORS.border, height: 1, marginVertical: 12 },
 };
 
-type Tab = 'chat' | 'mentorship' | 'messages' | 'profile';
+// ── Nav config by role ────────────────────────────────────────────────────
+type TabId = 'chat' | 'lawyers' | 'mentorship' | 'messages' | 'discovery' | 'clients';
+
+function getNavItems(role: UserRole | null | undefined) {
+  if (isLawyer(role)) {
+    return [
+      { id: 'messages' as TabId, icon: 'message-outline', activeIcon: 'message', label: 'Messages' },
+      { id: 'clients' as TabId, icon: 'account-multiple-outline', activeIcon: 'account-multiple', label: 'Clients' },
+      { id: 'discovery' as TabId, icon: 'compass-outline', activeIcon: 'compass', label: 'Discovery' },
+    ];
+  }
+  if (isLawStudent(role)) {
+    return [
+      { id: 'chat' as TabId, icon: 'home-outline', activeIcon: 'home', label: 'Home' },
+      { id: 'mentorship' as TabId, icon: 'account-tie-outline', activeIcon: 'account-tie', label: 'Mentorship' },
+      { id: 'messages' as TabId, icon: 'message-outline', activeIcon: 'message', label: 'Messages' },
+      { id: 'discovery' as TabId, icon: 'compass-outline', activeIcon: 'compass', label: 'Discovery' },
+    ];
+  }
+  // general_user (default)
+  return [
+    { id: 'chat' as TabId, icon: 'home-outline', activeIcon: 'home', label: 'Home' },
+    { id: 'lawyers' as TabId, icon: 'account-tie-outline', activeIcon: 'account-tie', label: 'Lawyers' },
+    { id: 'messages' as TabId, icon: 'message-outline', activeIcon: 'message', label: 'Messages' },
+    { id: 'discovery' as TabId, icon: 'compass-outline', activeIcon: 'compass', label: 'Discovery' },
+  ];
+}
+
+function getDefaultTab(role: UserRole | null | undefined): TabId {
+  return isLawyer(role) ? 'messages' : 'chat';
+}
+
+// ── Smart home screen ─────────────────────────────────────────────────────
+const RECENT_CASES = [
+  'Landlord Eviction — Lagos 2024',
+  'Employment Termination Review',
+  'Contract Breach — Okonkwo v. DST',
+];
+
+function getTimeGreeting() {
+  const h = new Date().getHours();
+  if (h < 12) return 'Good morning';
+  if (h < 17) return 'Good afternoon';
+  if (h < 21) return 'Good evening';
+  return 'Good night';
+}
+
+function getSmartPrompt(role: UserRole | null | undefined, name: string, hasHistory: boolean): string | null {
+  if (!hasHistory) return null;
+  const greeting = getTimeGreeting();
+  if (isLawyer(role)) {
+    return `${greeting}, ${name}. Ready to continue with your latest case, or is there something new you need help with today?`;
+  }
+  if (isLawStudent(role)) {
+    return `${greeting}, ${name}. How did your moot court preparation go? Ready to continue where you left off?`;
+  }
+  return `${greeting}, ${name}. Your last session is saved. What would you like help with today?`;
+}
+
+function HomeScreen({ onSend, user }: { onSend: (t: string) => void; user: any }) {
+  const hasHistory = RECENT_CASES.length > 0;
+  const firstName = user?.fullName?.split(' ')[0] ?? user?.email?.split('@')[0] ?? 'there';
+  const smartPrompt = getSmartPrompt(user?.role, firstName, hasHistory);
+
+  // Clean minimal home — same for new and returning users
+  return (
+    <View style={styles.homeMinimal}>
+      <Image source={LB_LOGO} style={styles.lbLogoImg} resizeMode="contain" />
+      <Text style={styles.homeGreeting}>
+        {hasHistory ? smartPrompt : `${getTimeGreeting()}, ${firstName}.\nHow can LegalBridge help you today?`}
+      </Text>
+    </View>
+  );
+}
 
 // ── Message bubble ────────────────────────────────────────────────────────
 function MessageBubble({ message }: { message: Message }) {
@@ -86,62 +166,7 @@ function MessageBubble({ message }: { message: Message }) {
   );
 }
 
-// ── Home screen (empty chat state) ────────────────────────────────────────
-function HomeScreen({ onSend, user }: { onSend: (t: string) => void; user: any }) {
-  const pro = isLegalPro(user?.role);
-  const greeting = (() => {
-    const h = new Date().getHours();
-    if (h < 12) return 'Good morning';
-    if (h < 17) return 'Good afternoon';
-    return 'Good evening';
-  })();
-
-  const proCards = [
-    { cat: 'CASE SUMMARY', text: 'Summarise this judgement for my studies' },
-    { cat: 'MOOT COURT', text: 'Help me prepare moot court argument' },
-    { cat: 'LEGAL PRINCIPLE', text: 'Explain this legal principle in simple terms' },
-    { cat: 'STATUTE GUIDE', text: 'Help me understand this statute' },
-  ];
-  const generalCards = [
-    { cat: 'TENANT RIGHTS', text: 'My landlord is trying to evict me without notice' },
-    { cat: 'BUSINESS LAW', text: 'How do I register my business in Nigeria?' },
-    { cat: 'EMPLOYMENT', text: 'My employer owes me unpaid salary. What can I do?' },
-    { cat: 'FAMILY LAW', text: 'What are the steps for legal separation in Nigeria?' },
-  ];
-  const cards = pro ? proCards : generalCards;
-
-  return (
-    <ScrollView style={styles.homeScroll} contentContainerStyle={styles.homeContent} showsVerticalScrollIndicator={false}>
-      {/* LB Logo */}
-      <View style={styles.lbLogo}>
-        <Text style={styles.lbLogoText}>LB</Text>
-      </View>
-
-      <Text style={styles.homeGreeting}>{greeting}, {user?.fullName?.split(' ')[0] ?? 'Counselor'}.</Text>
-      <Text style={styles.homeSub}>Your Nigerian law research companion, built for Nigerian law.</Text>
-
-      <View style={styles.quickCards}>
-        {cards.map((c) => (
-          <TouchableOpacity key={c.cat} style={styles.quickCard} onPress={() => onSend(c.text)} activeOpacity={0.8}>
-            <View style={styles.quickCardInner}>
-              <Text style={styles.quickCat}>{c.cat}</Text>
-              <Text style={styles.quickText}>{c.text}</Text>
-            </View>
-            <MaterialCommunityIcons name="arrow-right" size={18} color={COLORS.primary} />
-          </TouchableOpacity>
-        ))}
-      </View>
-    </ScrollView>
-  );
-}
-
 // ── Side drawer ───────────────────────────────────────────────────────────
-const RECENT_CASES = [
-  'Landlord Eviction — Lagos 2024',
-  'Employment Termination Review',
-  'Contract Breach — Okonkwo v. DST',
-];
-
 function SideDrawer({ visible, onClose, onNavigate }: {
   visible: boolean; onClose: () => void; onNavigate: (r: string) => void;
 }) {
@@ -153,52 +178,58 @@ function SideDrawer({ visible, onClose, onNavigate }: {
     { icon: 'magnify', label: 'Research Tools', route: 'history' },
   ];
 
+  const insets = useSafeAreaInsets();
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <Pressable style={styles.drawerOverlay} onPress={onClose}>
         <Pressable style={styles.drawer} onPress={() => {}}>
-          {/* Wordmark */}
-          <View style={styles.drawerWordmark}>
-            <Text style={styles.drawerWordmarkLegal}>Legal</Text>
-            <Text style={styles.drawerWordmarkBridge}>Bridge</Text>
-          </View>
-
-          {/* + New case */}
-          <TouchableOpacity
-            style={styles.newCaseBtn}
-            onPress={() => { clearChat(); onClose(); }}
-            activeOpacity={0.85}
+          {/* Scrollable middle */}
+          <ScrollView
+            style={styles.drawerBody}
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={[styles.drawerScroll, { paddingTop: insets.top + 20 }]}
           >
-            <MaterialCommunityIcons name="plus" size={18} color="#fff" />
-            <Text style={styles.newCaseBtnText}>New case</Text>
-          </TouchableOpacity>
+            <View style={styles.drawerWordmark}>
+              <Text style={styles.drawerWordmarkLegal}>Legal</Text>
+              <Text style={styles.drawerWordmarkBridge}>Bridge</Text>
+            </View>
 
-          <View style={styles.drawerDivider} />
-
-          {menuItems.map((item) => (
-            <TouchableOpacity key={item.label} style={styles.drawerItem} onPress={() => onNavigate(item.route)} activeOpacity={0.7}>
-              <MaterialCommunityIcons name={item.icon as any} size={20} color={COLORS.primary} />
-              <Text style={styles.drawerLabel}>{item.label}</Text>
+            <TouchableOpacity
+              style={styles.newCaseBtn}
+              onPress={() => { clearChat(); onClose(); }}
+              activeOpacity={0.85}
+            >
+              <MaterialCommunityIcons name="plus" size={18} color="#fff" />
+              <Text style={styles.newCaseBtnText}>New case</Text>
             </TouchableOpacity>
-          ))}
 
-          {/* Recent */}
-          <View style={styles.drawerDivider} />
-          <Text style={styles.recentLabel}>RECENT</Text>
-          {RECENT_CASES.map((c) => (
-            <TouchableOpacity key={c} style={styles.recentItem} onPress={onClose} activeOpacity={0.7}>
-              <MaterialCommunityIcons name="file-document-outline" size={16} color={COLORS.textSecondary} />
-              <Text style={styles.recentText} numberOfLines={1}>{c}</Text>
+            <View style={styles.drawerDivider} />
+
+            {menuItems.map((item) => (
+              <TouchableOpacity key={item.label} style={styles.drawerItem} onPress={() => onNavigate(item.route)} activeOpacity={0.7}>
+                <MaterialCommunityIcons name={item.icon as any} size={20} color={COLORS.primary} />
+                <Text style={styles.drawerLabel}>{item.label}</Text>
+              </TouchableOpacity>
+            ))}
+
+            <View style={styles.drawerDivider} />
+            <Text style={styles.recentLabel}>RECENT</Text>
+            {RECENT_CASES.map((c) => (
+              <TouchableOpacity key={c} style={styles.recentItem} onPress={onClose} activeOpacity={0.7}>
+                <MaterialCommunityIcons name="file-document-outline" size={16} color={COLORS.textSecondary} />
+                <Text style={styles.recentText} numberOfLines={1}>{c}</Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+
+          {/* Pinned footer — always visible */}
+          <View style={[styles.drawerFooter, { paddingBottom: insets.bottom + 8 }]}>
+            <TouchableOpacity style={styles.drawerSettingsBtn} onPress={() => onNavigate('settings')} activeOpacity={0.7}>
+              <MaterialCommunityIcons name="cog-outline" size={22} color={COLORS.primary} />
+              <Text style={styles.drawerSettingsLabel}>Settings</Text>
+              <MaterialCommunityIcons name="chevron-right" size={20} color={COLORS.border} />
             </TouchableOpacity>
-          ))}
-
-          {/* Settings at bottom */}
-          <View style={{ flex: 1 }} />
-          <View style={styles.drawerDivider} />
-          <TouchableOpacity style={styles.drawerItem} onPress={() => onNavigate('settings')} activeOpacity={0.7}>
-            <MaterialCommunityIcons name="cog-outline" size={20} color={COLORS.textSecondary} />
-            <Text style={[styles.drawerLabel, { color: COLORS.textSecondary }]}>Settings</Text>
-          </TouchableOpacity>
+          </View>
         </Pressable>
       </Pressable>
     </Modal>
@@ -236,18 +267,126 @@ function PlusSheet({ visible, onClose }: { visible: boolean; onClose: () => void
   );
 }
 
-// ── Bottom nav ────────────────────────────────────────────────────────────
-const NAV_ITEMS: { id: Tab; icon: string; activeIcon: string; label: string }[] = [
-  { id: 'chat', icon: 'chat-outline', activeIcon: 'chat', label: 'AI Chat' },
-  { id: 'mentorship', icon: 'account-tie-outline', activeIcon: 'account-tie', label: 'Mentorship' },
-  { id: 'messages', icon: 'message-outline', activeIcon: 'message', label: 'Messages' },
-  { id: 'profile', icon: 'account-outline', activeIcon: 'account', label: 'Profile' },
-];
+// ── Live bar (voice/camera mode) ──────────────────────────────────────────
+function LiveBar({ onExit }: { onExit: () => void }) {
+  const pulseAnim = useRef(new Animated.Value(1)).current;
 
-function BottomNav({ tab, onTab }: { tab: Tab; onTab: (t: Tab) => void }) {
+  useEffect(() => {
+    const pulse = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, { toValue: 1.15, duration: 700, useNativeDriver: true }),
+        Animated.timing(pulseAnim, { toValue: 1, duration: 700, useNativeDriver: true }),
+      ])
+    );
+    pulse.start();
+    return () => pulse.stop();
+  }, []);
+
+  const glowOpacity = pulseAnim.interpolate({ inputRange: [1, 1.15], outputRange: [0.5, 1] });
+
   return (
-    <View style={styles.bottomNav}>
-      {NAV_ITEMS.map((item) => {
+    <View style={styles.liveBar}>
+      {/* Screen share */}
+      <TouchableOpacity
+        style={styles.liveCircle}
+        onPress={() => Alert.alert('Screen Share', 'Coming in next update.')}
+        activeOpacity={0.8}
+      >
+        <MaterialCommunityIcons name="monitor-share-outline" size={20} color={COLORS.primary} />
+      </TouchableOpacity>
+
+      {/* Camera */}
+      <TouchableOpacity
+        style={styles.liveCircle}
+        onPress={() => Alert.alert('Camera', 'Coming in next update.')}
+        activeOpacity={0.8}
+      >
+        <MaterialCommunityIcons name="camera-outline" size={20} color={COLORS.primary} />
+      </TouchableOpacity>
+
+      {/* Central animated listening pill */}
+      <Animated.View style={[styles.livePill, { transform: [{ scaleX: pulseAnim }], opacity: glowOpacity }]}>
+        <MaterialCommunityIcons name="waveform" size={22} color="#fff" />
+        <Text style={styles.livePillText}>Listening…</Text>
+      </Animated.View>
+
+      {/* Mic */}
+      <TouchableOpacity style={[styles.liveCircle, styles.liveCircleMic]} activeOpacity={0.8}>
+        <MaterialCommunityIcons name="microphone" size={20} color="#fff" />
+      </TouchableOpacity>
+
+      {/* Exit */}
+      <TouchableOpacity style={[styles.liveCircle, styles.liveCircleExit]} onPress={onExit} activeOpacity={0.8}>
+        <MaterialCommunityIcons name="close" size={20} color={COLORS.error} />
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+// ── Input bar ─────────────────────────────────────────────────────────────
+function InputBar({
+  inputText, setInputText, inputState, onSend, onStop, onPlus, onLive, inputRef,
+}: {
+  inputText: string;
+  setInputText: (t: string) => void;
+  inputState: 'idle' | 'typing' | 'generating';
+  onSend: () => void;
+  onStop: () => void;
+  onPlus: () => void;
+  onLive: () => void;
+  inputRef?: React.RefObject<TextInput>;
+}) {
+  return (
+    <View style={styles.inputBar}>
+      <View style={styles.inputPill}>
+        {/* + attach */}
+        <TouchableOpacity style={styles.pillSideBtn} onPress={onPlus} disabled={inputState === 'generating'}>
+          <MaterialCommunityIcons name="plus" size={22} color={COLORS.textSecondary} />
+        </TouchableOpacity>
+
+        {/* Text field */}
+        <TextInput
+          ref={inputRef}
+          style={styles.pillInput}
+          value={inputText}
+          onChangeText={setInputText}
+          placeholder="Reply to LegalBridge…"
+          placeholderTextColor={COLORS.textSecondary}
+          multiline
+          maxLength={2000}
+          editable={inputState !== 'generating'}
+        />
+
+        {/* Right action: stop | send | mic */}
+        {inputState === 'generating' ? (
+          <TouchableOpacity style={styles.pillActionBtn} onPress={onStop}>
+            <View style={styles.stopIcon} />
+          </TouchableOpacity>
+        ) : inputState === 'typing' ? (
+          <TouchableOpacity style={styles.pillActionBtn} onPress={onSend}>
+            <MaterialCommunityIcons name="arrow-up" size={18} color="#fff" />
+          </TouchableOpacity>
+        ) : (
+          <TouchableOpacity style={styles.pillSideBtn} onPress={() => Alert.alert('Voice Input', 'Coming in next update.')}>
+            <MaterialCommunityIcons name="microphone-outline" size={22} color={COLORS.textSecondary} />
+          </TouchableOpacity>
+        )}
+      </View>
+
+      {/* Waveform / live mode trigger */}
+      <TouchableOpacity style={styles.waveBtn} onPress={onLive} activeOpacity={0.8}>
+        <MaterialCommunityIcons name="waveform" size={20} color={COLORS.primary} />
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+// ── Bottom nav ────────────────────────────────────────────────────────────
+function BottomNav({ tab, onTab, role, bottomInset = 0 }: { tab: TabId; onTab: (t: TabId) => void; role: UserRole | null | undefined; bottomInset?: number }) {
+  const items = getNavItems(role);
+  return (
+    <View style={[styles.bottomNav, { paddingBottom: bottomInset > 0 ? bottomInset : 8 }]}>
+      {items.map((item) => {
         const active = tab === item.id;
         return (
           <TouchableOpacity key={item.id} style={styles.navItem} onPress={() => onTab(item.id)} activeOpacity={0.8}>
@@ -266,49 +405,49 @@ function BottomNav({ tab, onTab }: { tab: Tab; onTab: (t: Tab) => void }) {
   );
 }
 
-// ── Mentorship tab ────────────────────────────────────────────────────────
-function MentorshipTab({ user }: { user: any }) {
-  const router = useRouter();
-  const pro = isLegalPro(user?.role);
-
-  if (!pro) {
-    return (
-      <ScrollView contentContainerStyle={styles.tabContent}>
-        <Text style={styles.tabHeading}>Find a Lawyer</Text>
-        <Text style={styles.tabSub}>Connect with verified Nigerian legal professionals for consultation or representation.</Text>
-        <TouchableOpacity style={styles.tabCTA} onPress={() => router.push('/(main)/lawyers')} activeOpacity={0.85}>
-          <MaterialCommunityIcons name="account-search-outline" size={22} color="#fff" />
-          <Text style={styles.tabCTAText}>Browse Available Lawyers</Text>
-        </TouchableOpacity>
-        <View style={styles.tabCards}>
-          {[
-            { icon: 'clock-fast', title: 'Quick Consultation', desc: '30-min session with a verified lawyer' },
-            { icon: 'handshake-outline', title: 'Full Representation', desc: 'Hire a lawyer to handle your case' },
-            { icon: 'chat-question-outline', title: 'Ask a Question', desc: 'Get a written legal opinion' },
-          ].map((c) => (
-            <TouchableOpacity key={c.title} style={styles.featureCard} onPress={() => router.push('/(main)/lawyers')} activeOpacity={0.8}>
-              <MaterialCommunityIcons name={c.icon as any} size={26} color={COLORS.primary} />
-              <Text style={styles.featureCardTitle}>{c.title}</Text>
-              <Text style={styles.featureCardDesc}>{c.desc}</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-      </ScrollView>
-    );
-  }
-
+// ── Mentorship tab (law students) ─────────────────────────────────────────
+function MentorshipTab() {
   return (
     <ScrollView contentContainerStyle={styles.tabContent}>
       <Text style={styles.tabHeading}>Mentorship</Text>
       <Text style={styles.tabSub}>Connect with senior lawyers, find pupillage opportunities, and grow your legal career.</Text>
       <View style={styles.tabCards}>
         {[
-          { icon: 'school-outline', title: 'Find a Mentor', desc: 'Connect with senior legal practitioners' },
-          { icon: 'briefcase-check-outline', title: 'Pupillage Board', desc: 'Discover chambers accepting pupils' },
-          { icon: 'calendar-check-outline', title: 'Career Events', desc: 'Seminars, moots, and bar dinners' },
+          { icon: 'school-outline', title: 'Find a Mentor', desc: 'Connect with senior legal practitioners in your area of interest' },
+          { icon: 'briefcase-check-outline', title: 'Pupillage Board', desc: 'Browse chambers and law firms accepting pupils right now' },
+          { icon: 'calendar-check-outline', title: 'Career Events', desc: 'Seminars, moots, bar dinners, and networking events' },
+          { icon: 'book-open-outline', title: 'Study Groups', desc: 'Join active law student study and moot prep groups' },
         ].map((c) => (
           <TouchableOpacity key={c.title} style={styles.featureCard} activeOpacity={0.8}
             onPress={() => Alert.alert('Coming Soon', 'This feature is being built.')}>
+            <MaterialCommunityIcons name={c.icon as any} size={26} color={COLORS.primary} />
+            <Text style={styles.featureCardTitle}>{c.title}</Text>
+            <Text style={styles.featureCardDesc}>{c.desc}</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+    </ScrollView>
+  );
+}
+
+// ── Lawyers tab (general users) ───────────────────────────────────────────
+function LawyersTab() {
+  const router = useRouter();
+  return (
+    <ScrollView contentContainerStyle={styles.tabContent}>
+      <Text style={styles.tabHeading}>Find a Lawyer</Text>
+      <Text style={styles.tabSub}>Connect with verified Nigerian legal professionals for consultation or representation.</Text>
+      <TouchableOpacity style={styles.tabCTA} onPress={() => router.push('/(main)/lawyers')} activeOpacity={0.85}>
+        <MaterialCommunityIcons name="account-search-outline" size={22} color="#fff" />
+        <Text style={styles.tabCTAText}>Browse Available Lawyers</Text>
+      </TouchableOpacity>
+      <View style={styles.tabCards}>
+        {[
+          { icon: 'clock-fast', title: 'Quick Consultation', desc: '30-min session with a verified lawyer — from ₦5,000' },
+          { icon: 'handshake-outline', title: 'Full Representation', desc: 'Hire a lawyer to handle your case end-to-end' },
+          { icon: 'chat-question-outline', title: 'Ask a Question', desc: 'Get a written legal opinion within 24 hours' },
+        ].map((c) => (
+          <TouchableOpacity key={c.title} style={styles.featureCard} onPress={() => router.push('/(main)/lawyers')} activeOpacity={0.8}>
             <MaterialCommunityIcons name={c.icon as any} size={26} color={COLORS.primary} />
             <Text style={styles.featureCardTitle}>{c.title}</Text>
             <Text style={styles.featureCardDesc}>{c.desc}</Text>
@@ -351,6 +490,7 @@ function ProfileTab({ user }: { user: any }) {
   }
 
   const initials = (user?.fullName ?? user?.email ?? 'U').split(' ').map((w: string) => w[0]).slice(0, 2).join('').toUpperCase();
+  const roleLabel = isLawyer(user?.role) ? 'Lawyer' : isLawStudent(user?.role) ? 'Law Student' : 'General User';
 
   return (
     <ScrollView contentContainerStyle={styles.profileContent}>
@@ -360,7 +500,7 @@ function ProfileTab({ user }: { user: any }) {
       <Text style={styles.profileName}>{user?.fullName ?? 'User'}</Text>
       <Text style={styles.profileEmail}>{user?.email}</Text>
       <View style={styles.profileBadge}>
-        <Text style={styles.profileBadgeText}>{isLegalPro(user?.role) ? 'Legal Professional' : 'General User'}</Text>
+        <Text style={styles.profileBadgeText}>{roleLabel}</Text>
       </View>
 
       <View style={styles.profileMenu}>
@@ -395,17 +535,26 @@ export default function ChatScreen() {
   const {
     messages, isLoading,
     addUserMessage, startStreaming, appendStream, finaliseStream,
-    setLoading, setMode, clearChat,
+    setLoading, clearChat,
   } = useChatStore();
   const { user } = useAuthStore();
 
-  const [tab, setTab] = useState<Tab>('chat');
+  const [tab, setTab] = useState<TabId>(() => getDefaultTab(user?.role));
   const [inputText, setInputText] = useState('');
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [plusOpen, setPlusOpen] = useState(false);
+  const [liveMode, setLiveMode] = useState(false);
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
+  const inputRef = useRef<TextInput>(null);
   const chatIdRef = useRef(`chat_${Date.now()}`);
   const abortRef = useRef<AbortController | null>(null);
   const listRef = useRef<FlatList>(null);
+
+  useEffect(() => {
+    const show = Keyboard.addListener('keyboardDidShow', () => setKeyboardVisible(true));
+    const hide = Keyboard.addListener('keyboardDidHide', () => setKeyboardVisible(false));
+    return () => { show.remove(); hide.remove(); };
+  }, []);
 
   function scrollToBottom() {
     setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 50);
@@ -413,7 +562,14 @@ export default function ChatScreen() {
 
   function navigate(route: string) {
     setDrawerOpen(false);
+    if (route === 'chat') { setTab('chat'); return; }
     router.push(`/(main)/${route}` as any);
+  }
+
+  function startNewCase() {
+    clearChat();
+    chatIdRef.current = `chat_${Date.now()}`;
+    setTab('chat');
   }
 
   async function sendMessage(text?: string) {
@@ -434,7 +590,18 @@ export default function ChatScreen() {
         scrollToBottom();
       }, abort.signal);
     } catch (e: any) {
-      if (e?.name !== 'AbortError') appendStream(`\n\n_Error: ${e?.message ?? e}_`);
+      const isAbort =
+        e?.name === 'AbortError' ||
+        e?.name === 'CanceledError' ||
+        (typeof e?.message === 'string' &&
+          (e.message.toLowerCase().includes('aborted') ||
+           e.message.toLowerCase().includes('canceled') ||
+           e.message.toLowerCase().includes('cancelled')));
+      if (!isAbort) {
+        const msg = e?.message ?? String(e);
+        appendStream(`\n\n_Something went wrong. Please check your connection and try again._`);
+        console.error('[chat] stream error:', msg);
+      }
     } finally {
       finaliseStream(aiMsgId);
       abortRef.current = null;
@@ -449,33 +616,38 @@ export default function ChatScreen() {
     setLoading(false);
   }
 
-  const inputState = isLoading ? 'generating' : inputText.trim() ? 'typing' : 'idle';
-  const showChat = tab === 'chat';
+  const inputState: 'idle' | 'typing' | 'generating' = isLoading ? 'generating' : inputText.trim() ? 'typing' : 'idle';
+  const showChatInput = tab === 'chat';
 
   return (
-    <View style={[styles.root, { paddingTop: insets.top }]}>
-      {/* Header */}
+    <KeyboardAvoidingView
+      style={[styles.root, { paddingTop: insets.top }]}
+      behavior="padding"
+      keyboardVerticalOffset={0}
+    >
+      {/* Header — no title when in chat tab */}
       <View style={styles.header}>
         <TouchableOpacity style={styles.headerBtn} onPress={() => setDrawerOpen(true)}>
           <MaterialCommunityIcons name="menu" size={24} color={COLORS.text} />
         </TouchableOpacity>
-        <Text style={styles.headerWordmark}>
-          <Text style={{ color: COLORS.text }}>Legal</Text>
-          <Text style={{ color: COLORS.accent, fontStyle: 'italic' }}>Bridge</Text>
-        </Text>
-        <TouchableOpacity style={styles.headerBtn} onPress={() => { clearChat(); setTab('chat'); }}>
+        {tab !== 'chat' && (
+          <Text style={styles.headerWordmark}>
+            <Text style={{ color: COLORS.text }}>Legal</Text>
+            <Text style={{ color: COLORS.accent, fontStyle: 'italic' }}>Bridge</Text>
+          </Text>
+        )}
+        {tab === 'chat' && <View style={{ flex: 1 }} />}
+        <TouchableOpacity style={styles.headerBtn} onPress={startNewCase}>
           <MaterialCommunityIcons name="square-edit-outline" size={22} color={COLORS.text} />
         </TouchableOpacity>
       </View>
 
-      {/* Content */}
+      {/* Content — takes all remaining space */}
       <View style={styles.content}>
         {tab === 'chat' && (
-          <>
-            {messages.length === 0 ? (
-              <HomeScreen onSend={(t) => sendMessage(t)} user={user} />
-            ) : (
-              <FlatList
+          messages.length === 0
+            ? <HomeScreen onSend={(t) => { setTab('chat'); sendMessage(t); }} user={user} />
+            : <FlatList
                 ref={listRef}
                 data={messages}
                 keyExtractor={(m) => m.id}
@@ -484,54 +656,38 @@ export default function ChatScreen() {
                 showsVerticalScrollIndicator={false}
                 onContentSizeChange={scrollToBottom}
               />
-            )}
-
-            {/* Input bar */}
-            <View style={styles.inputBar}>
-              <View style={styles.inputRow}>
-                <TouchableOpacity style={styles.plusBtn} onPress={() => setPlusOpen(true)} disabled={isLoading}>
-                  <MaterialCommunityIcons name="plus" size={22} color={COLORS.textSecondary} />
-                </TouchableOpacity>
-                <TextInput
-                  style={styles.textInput}
-                  value={inputText}
-                  onChangeText={setInputText}
-                  placeholder="Reply to LegalBridge…"
-                  placeholderTextColor={COLORS.textSecondary}
-                  multiline
-                  maxLength={2000}
-                  editable={!isLoading}
-                />
-                {inputState === 'generating' ? (
-                  <TouchableOpacity style={styles.sendBtn} onPress={stopGeneration}>
-                    <View style={styles.stopIcon} />
-                  </TouchableOpacity>
-                ) : inputState === 'typing' ? (
-                  <TouchableOpacity style={styles.sendBtn} onPress={() => sendMessage()}>
-                    <MaterialCommunityIcons name="arrow-up" size={20} color="#fff" />
-                  </TouchableOpacity>
-                ) : (
-                  <TouchableOpacity style={styles.micBtn} onPress={() => Alert.alert('Voice Input', 'Coming in the next update.')}>
-                    <MaterialCommunityIcons name="microphone-outline" size={22} color={COLORS.textSecondary} />
-                  </TouchableOpacity>
-                )}
-              </View>
-            </View>
-          </>
         )}
-        {tab === 'mentorship' && <MentorshipTab user={user} />}
+        {tab === 'lawyers' && <LawyersTab />}
+        {tab === 'mentorship' && <MentorshipTab />}
         {tab === 'messages' && <MessagesTab />}
-        {tab === 'profile' && <ProfileTab user={user} />}
+        {tab === 'discovery' && <DiscoveryScreen embedded />}
+        {tab === 'clients' && <ClientsScreen embedded />}
       </View>
 
-      {/* Bottom nav */}
-      <View style={{ paddingBottom: insets.bottom }}>
-        <BottomNav tab={tab} onTab={setTab} />
-      </View>
+      {/* Input bar — independent from nav, floats above keyboard. Same on home & in conversation. */}
+      {showChatInput && (
+        liveMode
+          ? <LiveBar onExit={() => setLiveMode(false)} />
+          : <InputBar
+              inputText={inputText}
+              setInputText={setInputText}
+              inputState={inputState}
+              onSend={() => sendMessage()}
+              onStop={stopGeneration}
+              onPlus={() => setPlusOpen(true)}
+              onLive={() => setLiveMode(true)}
+              inputRef={inputRef}
+            />
+      )}
+
+      {/* Bottom nav — hides when keyboard is open. Inset lives inside the nav so its surface reaches the screen edge. */}
+      {!keyboardVisible && (
+        <BottomNav tab={tab} onTab={setTab} role={user?.role} bottomInset={insets.bottom} />
+      )}
 
       <SideDrawer visible={drawerOpen} onClose={() => setDrawerOpen(false)} onNavigate={navigate} />
       <PlusSheet visible={plusOpen} onClose={() => setPlusOpen(false)} />
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -549,29 +705,10 @@ const styles = StyleSheet.create({
   headerBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
   headerWordmark: { fontSize: 20, fontWeight: '700' },
 
-  // Home screen
-  homeScroll: { flex: 1 },
-  homeContent: { alignItems: 'center', paddingHorizontal: 20, paddingTop: 40, paddingBottom: 24 },
-  lbLogo: {
-    width: 64, height: 64, borderRadius: 18,
-    backgroundColor: COLORS.primary, alignItems: 'center', justifyContent: 'center',
-    marginBottom: 24,
-    shadowColor: COLORS.primary, shadowOpacity: 0.35, shadowRadius: 12, shadowOffset: { width: 0, height: 4 },
-    elevation: 6,
-  },
-  lbLogoText: { color: '#fff', fontSize: 24, fontWeight: '900', letterSpacing: -1 },
-  homeGreeting: { fontSize: 26, fontWeight: '800', color: COLORS.text, textAlign: 'center', marginBottom: 8 },
-  homeSub: { fontSize: 14, color: COLORS.textSecondary, textAlign: 'center', lineHeight: 21, marginBottom: 32 },
-  quickCards: { width: '100%', gap: 10 },
-  quickCard: {
-    flexDirection: 'row', alignItems: 'center',
-    backgroundColor: COLORS.surface, borderRadius: 14,
-    borderWidth: 1, borderColor: COLORS.border,
-    padding: 16, gap: 12,
-  },
-  quickCardInner: { flex: 1 },
-  quickCat: { fontSize: 10, fontWeight: '800', color: COLORS.primary, letterSpacing: 1, textTransform: 'uppercase', marginBottom: 4 },
-  quickText: { fontSize: 14, color: COLORS.text, fontWeight: '500', lineHeight: 20 },
+  // Home — clean minimal
+  homeMinimal: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32 },
+  lbLogoImg: { width: 110, height: 110 },
+  homeGreeting: { fontSize: 17, fontWeight: '500', color: COLORS.text, lineHeight: 26, marginTop: 20, textAlign: 'center' },
 
   // Messages
   messageList: { paddingVertical: 16 },
@@ -591,41 +728,77 @@ const styles = StyleSheet.create({
   },
   docTagText: { fontSize: 11, color: COLORS.accent, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 },
 
-  // Input bar
+  // Input bar — floating, independent from nav
   inputBar: {
+    flexDirection: 'row', alignItems: 'flex-end', gap: 8,
     backgroundColor: COLORS.surface,
-    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: COLORS.border,
+    borderRadius: 28,
+    marginHorizontal: 12,
+    marginBottom: 8,
     paddingHorizontal: 10, paddingVertical: 8,
-  },
-  inputRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 6 },
-  plusBtn: {
-    width: 38, height: 38, borderRadius: 19,
-    backgroundColor: COLORS.background, alignItems: 'center', justifyContent: 'center',
-    borderWidth: 1, borderColor: COLORS.border, marginBottom: 1,
-  },
-  textInput: {
-    flex: 1, minHeight: 40, maxHeight: 140,
-    backgroundColor: COLORS.background, borderRadius: 20,
-    paddingHorizontal: 16, paddingVertical: 10,
-    fontSize: 15, color: COLORS.text,
+    shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 16,
+    shadowOffset: { width: 0, height: 4 }, elevation: 8,
     borderWidth: 1, borderColor: COLORS.border,
   },
-  sendBtn: {
-    width: 38, height: 38, borderRadius: 19,
-    backgroundColor: COLORS.primary, alignItems: 'center', justifyContent: 'center', marginBottom: 1,
+  inputPill: {
+    flex: 1, flexDirection: 'row', alignItems: 'flex-end',
+    backgroundColor: COLORS.background,
+    borderRadius: 26, borderWidth: 1, borderColor: COLORS.border,
+    paddingHorizontal: 4, paddingVertical: 4, gap: 2,
   },
-  stopIcon: { width: 13, height: 13, borderRadius: 2, backgroundColor: '#fff' },
-  micBtn: {
-    width: 38, height: 38, borderRadius: 19,
-    backgroundColor: COLORS.background, alignItems: 'center', justifyContent: 'center',
-    borderWidth: 1, borderColor: COLORS.border, marginBottom: 1,
+  pillSideBtn: {
+    width: 36, height: 36, borderRadius: 18,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  pillInput: {
+    flex: 1, minHeight: 36, maxHeight: 130,
+    fontSize: 15, color: COLORS.text,
+    paddingHorizontal: 8, paddingVertical: 6,
+  },
+  pillActionBtn: {
+    width: 36, height: 36, borderRadius: 18,
+    backgroundColor: COLORS.primary, alignItems: 'center', justifyContent: 'center',
+  },
+  stopIcon: { width: 12, height: 12, borderRadius: 2, backgroundColor: '#fff' },
+  waveBtn: {
+    width: 44, height: 44, borderRadius: 22,
+    backgroundColor: `${COLORS.primary}18`,
+    borderWidth: 1, borderColor: `${COLORS.primary}30`,
+    alignItems: 'center', justifyContent: 'center',
   },
 
-  // Bottom nav
+  // Live bar — floats same as input bar
+  liveBar: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    backgroundColor: COLORS.surface,
+    borderRadius: 28,
+    marginHorizontal: 12, marginBottom: 8,
+    paddingHorizontal: 14, paddingVertical: 10, gap: 10,
+    shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 16,
+    shadowOffset: { width: 0, height: 4 }, elevation: 8,
+    borderWidth: 1, borderColor: COLORS.border,
+  },
+  liveCircle: {
+    width: 44, height: 44, borderRadius: 22,
+    backgroundColor: COLORS.background,
+    borderWidth: 1, borderColor: COLORS.border,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  liveCircleMic: { backgroundColor: COLORS.primary, borderColor: COLORS.primary },
+  liveCircleExit: { backgroundColor: '#fff2f2', borderColor: '#fca5a5' },
+  livePill: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    backgroundColor: COLORS.primary, borderRadius: 22, paddingVertical: 12,
+    shadowColor: COLORS.primary, shadowOpacity: 0.4, shadowRadius: 10,
+    shadowOffset: { width: 0, height: 0 }, elevation: 8,
+  },
+  livePillText: { color: '#fff', fontSize: 13, fontWeight: '700' },
+
+  // Bottom nav — independent, sits at very bottom with no connection to input bar
   bottomNav: {
     flexDirection: 'row', backgroundColor: COLORS.surface,
     borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: COLORS.border,
-    paddingVertical: 8, paddingHorizontal: 8,
+    paddingTop: 8, paddingHorizontal: 8,
   },
   navItem: { flex: 1, alignItems: 'center', gap: 3 },
   navPill: { width: 48, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
@@ -635,7 +808,18 @@ const styles = StyleSheet.create({
 
   // Side drawer
   drawerOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', flexDirection: 'row' },
-  drawer: { width: 290, backgroundColor: COLORS.surface, paddingTop: 56, paddingBottom: 24 },
+  drawer: { width: 290, backgroundColor: COLORS.surface },
+  drawerBody: { flex: 1 },
+  drawerScroll: { paddingBottom: 16 },
+  drawerFooter: {
+    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: COLORS.border,
+    paddingTop: 8,
+  },
+  drawerSettingsBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 14,
+    paddingVertical: 14, paddingHorizontal: 20,
+  },
+  drawerSettingsLabel: { flex: 1, fontSize: 16, color: COLORS.text, fontWeight: '600' },
   drawerWordmark: { flexDirection: 'row', paddingHorizontal: 20, marginBottom: 20 },
   drawerWordmarkLegal: { fontSize: 22, fontWeight: '800', color: COLORS.text },
   drawerWordmarkBridge: { fontSize: 22, fontWeight: '800', fontStyle: 'italic', color: COLORS.accent },
