@@ -51,11 +51,19 @@ export async function streamDocument(
   chatId: string,
   onChunk: (text: string) => void,
   signal?: AbortSignal,
+  opts?: { userType?: string; history?: { role: 'user' | 'assistant'; content: string }[] },
 ): Promise<void> {
   const token = await getAuthToken();
   // Route through the same Supabase infra as chat (chat-documents Edge Function)
   // — the api.legalbridge.ng/v1/documents path was failing in-app.
   const url = `${SUPABASE_URL}/functions/v1/chat-documents`;
+
+  // chat-documents expects a `messages` array (it reads the LAST message's content),
+  // not a single `message` string.
+  const messages = [
+    ...(opts?.history ?? []),
+    { role: 'user' as const, content: message },
+  ];
 
   let response: Response;
   try {
@@ -66,7 +74,7 @@ export async function streamDocument(
         Authorization: `Bearer ${token}`,
         apikey: SUPABASE_ANON_KEY,
       },
-      body: JSON.stringify({ message, chatId }),
+      body: JSON.stringify({ messages, userType: opts?.userType ?? 'other', summary: '', profile: {} }),
       signal,
     });
   } catch (e: any) {

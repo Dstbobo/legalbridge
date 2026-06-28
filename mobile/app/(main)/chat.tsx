@@ -624,11 +624,13 @@ export default function ChatScreen() {
     const abort = new AbortController();
     abortRef.current = abort;
     try {
-      const stream = isDraft ? streamDocument : streamChat;
-      await stream(content, chatIdRef.current, (chunk) => {
-        appendStream(chunk);
-        scrollToBottom();
-      }, abort.signal);
+      const onChunk = (chunk: string) => { appendStream(chunk); scrollToBottom(); };
+      if (isDraft) {
+        const userType = isLawyer(user?.role) ? 'lawyer' : isLawStudent(user?.role) ? 'student' : 'other';
+        await streamDocument(content, chatIdRef.current, onChunk, abort.signal, { userType });
+      } else {
+        await streamChat(content, chatIdRef.current, onChunk, abort.signal);
+      }
     } catch (e: any) {
       const isAbort =
         e?.name === 'AbortError' ||
