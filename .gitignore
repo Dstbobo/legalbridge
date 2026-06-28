@@ -1,0 +1,36 @@
+
+# ── Capacitor / Android ──────────────────────────────────────────────────
+node_modules/
+www/
+android/keystore.properties
+android/*.keystore
+android/*.jks
+android/app/build/
+android/.gradle/
+android/build/
+*.aab
+*.apk
+
+# ── React Native / Expo (mobile/) ────────────────────────────────────────
+mobile/node_modules/
+mobile/.expo/
+mobile/android/
+mobile/ios/
+mobile/dist/
+mobile/.env
+mobile/.env.local
+mobile/.env.production
+
+# ── Environment / Secrets ─────────────────────────────────────────────────
+.env
+.env.local
+.env.production
+
+# ── Supabase ──────────────────────────────────────────────────────────────
+supabase/.temp/
+
+# ── OS / Editor ───────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
