@@ -18,7 +18,7 @@ import { Image } from 'react-native';
 import { isLawyer, isLawStudent, type UserRole } from '@/constants/roles';
 import DiscoveryScreen from './discovery';
 import ClientsScreen from './clients';
-import LiveCamera from '@/components/LiveCamera';
+import VoiceConversation from '@/components/VoiceConversation';
 
 type ChatMode = 'assistant' | 'draft';
 
@@ -780,7 +780,7 @@ export default function ChatScreen() {
         onAction={handleMoreAction}
         topOffset={insets.top + 60}
       />
-      <LiveCamera visible={liveMode} onClose={() => setLiveMode(false)} />
+      <VoiceConversation visible={liveMode} onClose={() => setLiveMode(false)} />
 
       {/* Mode switcher dropdown — Assistant vs Draft Document */}
       <Modal visible={modeMenuOpen} transparent animationType="fade" onRequestClose={() => setModeMenuOpen(false)}>
