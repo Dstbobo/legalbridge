@@ -53,8 +53,9 @@ export async function streamDocument(
   signal?: AbortSignal,
 ): Promise<void> {
   const token = await getAuthToken();
-  const apiUrl = process.env.EXPO_PUBLIC_API_URL ?? 'https://api.legalbridge.ng';
-  const url = `${apiUrl}/v1/documents`;
+  // Route through the same Supabase infra as chat (chat-documents Edge Function)
+  // — the api.legalbridge.ng/v1/documents path was failing in-app.
+  const url = `${SUPABASE_URL}/functions/v1/chat-documents`;
 
   let response: Response;
   try {

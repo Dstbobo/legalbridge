@@ -25,6 +25,7 @@ export interface LiveCallbacks {
   onStatus?: (s: LiveStatus) => void;
   onTranscript?: (role: 'user' | 'assistant', text: string) => void;
   onLevel?: (level: number) => void; // 0..1 input level for waveform
+  onError?: (detail: string) => void; // human-readable failure reason
 }
 
 export interface LiveSessionOptions {
@@ -131,13 +132,23 @@ export class LiveSession {
       throw new Error('Live URL not configured');
     }
 
+    // Microphone permission is critical.
     try {
       const perm = await AudioModule.requestRecordingPermissionsAsync();
       log('mic permission granted =', perm.granted);
       if (!perm.granted) {
+        this.cb.onError?.('Microphone permission denied. Enable it in Settings to use voice.');
         this.cb.onStatus?.('error');
         throw new Error('Microphone permission denied');
       }
+    } catch (e) {
+      this.cb.onError?.(`Mic permission error: ${(e as Error)?.message ?? e}`);
+      this.cb.onStatus?.('error');
+      throw e;
+    }
+
+    // Audio mode is non-critical — never let it block the session.
+    try {
       await setAudioModeAsync({
         allowsRecording: true,
         playsInSilentMode: true,
@@ -145,9 +156,7 @@ export class LiveSession {
         shouldRouteThroughEarpiece: false, // loudspeaker — with audioSource=6 avoids echo
       });
     } catch (e) {
-      log('audio setup failed:', (e as Error)?.message);
-      this.cb.onStatus?.('error');
-      throw e;
+      log('setAudioMode failed (non-fatal):', (e as Error)?.message);
     }
 
     this.openSocket();
@@ -198,6 +207,9 @@ export class LiveSession {
       log('proxy WS closed', e?.code ?? '', e?.reason ?? '');
       this.clearSetupTimer();
       if (this.closed) return;
+      if (!this.setupDone) {
+        this.cb.onError?.(`Could not reach the voice service (code ${e?.code ?? '?'}${e?.reason ? ': ' + e.reason : ''}).`);
+      }
       this.cb.onStatus?.(this.setupDone ? 'closed' : 'error');
     };
   }
@@ -272,6 +284,7 @@ export class LiveSession {
     if (this.micActive) return;
     if (!LiveAudioStream || typeof LiveAudioStream.init !== 'function') {
       log('ERROR: LiveAudioStream native module unavailable');
+      this.cb.onError?.('Microphone streaming module unavailable on this build.');
       this.cb.onStatus?.('error');
       return;
     }

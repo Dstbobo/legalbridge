@@ -25,6 +25,7 @@ export default function VoiceConversation({ visible, onClose }: { visible: boole
   const [userText, setUserText] = useState('');
   const [micMuted, setMicMuted] = useState(false);
   const [cameraOn, setCameraOn] = useState(false);
+  const [errorDetail, setErrorDetail] = useState('');
 
   const sessionRef = useRef<LiveSession | null>(null);
   const cameraRef = useRef<CameraView>(null);
@@ -90,10 +91,14 @@ export default function VoiceConversation({ visible, onClose }: { visible: boole
         roleLabel: user?.role ? ROLE_LABELS[user.role] : null,
         history,
       },
-      { onStatus: setStatus, onTranscript },
+      {
+        onStatus: (s) => { setStatus(s); if (s !== 'error') setErrorDetail(''); },
+        onTranscript,
+        onError: setErrorDetail,
+      },
     );
     sessionRef.current = session;
-    session.connect().catch(() => setStatus('error'));
+    session.connect().catch((e) => { setStatus('error'); setErrorDetail((prev) => prev || String(e?.message ?? e)); });
     return () => {
       stopFrames();
       session.close();
@@ -124,7 +129,7 @@ export default function VoiceConversation({ visible, onClose }: { visible: boole
     stopFrames();
     await sessionRef.current?.close();
     sessionRef.current = null;
-    setAiText(''); setUserText(''); setMicMuted(false); setCameraOn(false);
+    setAiText(''); setUserText(''); setMicMuted(false); setCameraOn(false); setErrorDetail('');
     setStatus('connecting');
     onClose();
   }, [onClose, stopFrames]);
@@ -148,28 +153,32 @@ export default function VoiceConversation({ visible, onClose }: { visible: boole
 
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={handleClose}>
-      <View style={styles.root}>
-        {/* Optional camera PiP */}
+      <View style={[styles.root, cameraOn && { backgroundColor: '#000' }]}>
+        {/* Full-screen camera when enabled (point-and-talk) */}
         {cameraOn && (
-          <View style={styles.cameraWrap}>
+          <>
             <CameraView ref={cameraRef} style={StyleSheet.absoluteFill} facing="back" animateShutter={false} />
-            <View style={styles.cameraBadge}>
+            <View style={styles.cameraScrim} />
+            <View style={[styles.cameraBadge, { top: insets.top + 12 }]}>
               <View style={styles.liveDot} />
-              <Text style={styles.cameraBadgeText}>Camera live</Text>
+              <Text style={styles.cameraBadgeText}>Camera live — point & talk</Text>
             </View>
-          </View>
+          </>
         )}
 
         <View style={[styles.content, { paddingTop: insets.top + 16 }]}>
           {aiText ? (
             <ScrollView ref={aiScrollRef} style={styles.aiScroll} contentContainerStyle={styles.aiScrollContent}>
-              <Text style={styles.aiSpeech}>{aiText}</Text>
+              <Text style={[styles.aiSpeech, cameraOn && styles.textOnCamera]}>{aiText}</Text>
             </ScrollView>
           ) : (
             <View style={styles.centerBlock}>
-              <Image source={LB_LOGO} style={styles.logo} resizeMode="contain" />
-              <Text style={styles.greeting}>How can I help, {firstName}?</Text>
-              <Text style={styles.statusLine}>{statusLine}</Text>
+              {!cameraOn && <Image source={LB_LOGO} style={styles.logo} resizeMode="contain" />}
+              <Text style={[styles.greeting, cameraOn && styles.textOnCamera]}>How can I help, {firstName}?</Text>
+              <Text style={[styles.statusLine, cameraOn && styles.textOnCameraDim]}>{statusLine}</Text>
+              {status === 'error' && !!errorDetail && (
+                <Text style={styles.errorDetail}>{errorDetail}</Text>
+              )}
             </View>
           )}
 
@@ -215,18 +224,20 @@ export default function VoiceConversation({ visible, onClose }: { visible: boole
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: COLORS.background },
   content: { flex: 1, justifyContent: 'space-between' },
-  cameraWrap: {
-    position: 'absolute', top: 90, right: 16, width: 120, height: 168,
-    borderRadius: 14, overflow: 'hidden', zIndex: 5,
-    borderWidth: 2, borderColor: `${COLORS.primary}66`,
-  },
+  cameraScrim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.28)' },
   cameraBadge: {
-    position: 'absolute', bottom: 6, alignSelf: 'center',
-    flexDirection: 'row', alignItems: 'center', gap: 5,
-    backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: 9, paddingHorizontal: 8, paddingVertical: 3,
+    position: 'absolute', alignSelf: 'center', zIndex: 6,
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: 12, paddingHorizontal: 12, paddingVertical: 6,
   },
-  cameraBadgeText: { color: '#fff', fontSize: 10.5, fontWeight: '600' },
-  liveDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: COLORS.error },
+  cameraBadgeText: { color: '#fff', fontSize: 12.5, fontWeight: '700' },
+  liveDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: COLORS.error },
+  textOnCamera: { color: '#fff' },
+  textOnCameraDim: { color: 'rgba(255,255,255,0.85)' },
+  errorDetail: {
+    fontSize: 13, color: COLORS.error, textAlign: 'center', marginTop: 14,
+    paddingHorizontal: 20, lineHeight: 19,
+  },
   centerBlock: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32 },
   logo: { width: 96, height: 96, marginBottom: 20 },
   greeting: { fontSize: 26, fontWeight: '800', color: COLORS.text, textAlign: 'center' },
