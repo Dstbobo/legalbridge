@@ -20,3 +20,6 @@ enabled = true
 
 [analytics]
 enabled = false
+
+[functions.live]
+verify_jwt = false

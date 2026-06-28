@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View, FlatList, StyleSheet, Text, TextInput,
   TouchableOpacity, Platform, Alert, Modal, Pressable, ScrollView,
-  Keyboard, Animated,
+  Keyboard, Share, Linking,
 } from 'react-native';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import Markdown from 'react-native-markdown-display';
@@ -16,6 +16,7 @@ import { Image } from 'react-native';
 import { isLawyer, isLawStudent, type UserRole } from '@/constants/roles';
 import DiscoveryScreen from './discovery';
 import ClientsScreen from './clients';
+import LiveCamera from '@/components/LiveCamera';
 
 const LB_LOGO = require('@/assets/logo.png');
 import { COLORS } from '@/constants/theme';
@@ -101,33 +102,48 @@ function getTimeGreeting() {
   if (h < 12) return 'Good morning';
   if (h < 17) return 'Good afternoon';
   if (h < 21) return 'Good evening';
-  return 'Good night';
+  return 'Good evening';
 }
 
-function getSmartPrompt(role: UserRole | null | undefined, name: string, hasHistory: boolean): string | null {
-  if (!hasHistory) return null;
-  const greeting = getTimeGreeting();
-  if (isLawyer(role)) {
-    return `${greeting}, ${name}. Ready to continue with your latest case, or is there something new you need help with today?`;
-  }
-  if (isLawStudent(role)) {
-    return `${greeting}, ${name}. How did your moot court preparation go? Ready to continue where you left off?`;
-  }
-  return `${greeting}, ${name}. Your last session is saved. What would you like help with today?`;
+// Rotating, formal "continue last session" prompts so it never feels static.
+const CONTINUE_PROMPTS: Record<'lawyer' | 'law_student' | 'general', string[]> = {
+  lawyer: [
+    'Would you like to continue with your latest case?',
+    'Shall we pick up where you left off?',
+    'Ready to resume your last matter?',
+  ],
+  law_student: [
+    'Would you like to continue where you left off?',
+    'Shall we resume your last study session?',
+    'Ready to pick up where you stopped?',
+  ],
+  general: [
+    'Would you like to continue where you left off?',
+    'Shall we pick up from your last session?',
+    'Ready to resume your previous session?',
+  ],
+};
+
+function getFollowUp(role: UserRole | null | undefined, hasHistory: boolean, variant: number): string {
+  if (!hasHistory) return 'How can LegalBridge help you today?';
+  const group = isLawyer(role) ? 'lawyer' : isLawStudent(role) ? 'law_student' : 'general';
+  const opts = CONTINUE_PROMPTS[group];
+  return opts[variant % opts.length];
 }
 
 function HomeScreen({ onSend, user }: { onSend: (t: string) => void; user: any }) {
   const hasHistory = RECENT_CASES.length > 0;
   const firstName = user?.fullName?.split(' ')[0] ?? user?.email?.split('@')[0] ?? 'there';
-  const smartPrompt = getSmartPrompt(user?.role, firstName, hasHistory);
+  // Pick a stable variant for this screen open (not on every keystroke/re-render).
+  const variant = React.useMemo(() => Math.floor(Math.random() * 3), []);
+  const greetingLine = `${getTimeGreeting()}, ${firstName}.`;
+  const followUp = getFollowUp(user?.role, hasHistory, variant);
 
-  // Clean minimal home — same for new and returning users
   return (
     <View style={styles.homeMinimal}>
       <Image source={LB_LOGO} style={styles.lbLogoImg} resizeMode="contain" />
-      <Text style={styles.homeGreeting}>
-        {hasHistory ? smartPrompt : `${getTimeGreeting()}, ${firstName}.\nHow can LegalBridge help you today?`}
-      </Text>
+      <Text style={styles.homeGreeting}>{greetingLine}</Text>
+      <Text style={styles.homeSubGreeting}>{followUp}</Text>
     </View>
   );
 }
@@ -267,59 +283,40 @@ function PlusSheet({ visible, onClose }: { visible: boolean; onClose: () => void
   );
 }
 
-// ── Live bar (voice/camera mode) ──────────────────────────────────────────
-function LiveBar({ onExit }: { onExit: () => void }) {
-  const pulseAnim = useRef(new Animated.Value(1)).current;
-
-  useEffect(() => {
-    const pulse = Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulseAnim, { toValue: 1.15, duration: 700, useNativeDriver: true }),
-        Animated.timing(pulseAnim, { toValue: 1, duration: 700, useNativeDriver: true }),
-      ])
-    );
-    pulse.start();
-    return () => pulse.stop();
-  }, []);
-
-  const glowOpacity = pulseAnim.interpolate({ inputRange: [1, 1.15], outputRange: [0.5, 1] });
-
+// ── Header "more" dropdown menu ───────────────────────────────────────────
+function MoreMenu({ visible, onClose, onAction, topOffset }: {
+  visible: boolean; onClose: () => void;
+  onAction: (key: string) => void; topOffset: number;
+}) {
+  const items: { key: string; icon: string; label: string; destructive?: boolean }[] = [
+    { key: 'share', icon: 'share-variant-outline', label: 'Share conversation' },
+    { key: 'save', icon: 'bookmark-outline', label: 'Save to my cases' },
+    { key: 'search', icon: 'magnify', label: 'Search chats' },
+    { key: 'report', icon: 'flag-outline', label: 'Report a problem' },
+    { key: 'clear', icon: 'trash-can-outline', label: 'Clear conversation', destructive: true },
+  ];
   return (
-    <View style={styles.liveBar}>
-      {/* Screen share */}
-      <TouchableOpacity
-        style={styles.liveCircle}
-        onPress={() => Alert.alert('Screen Share', 'Coming in next update.')}
-        activeOpacity={0.8}
-      >
-        <MaterialCommunityIcons name="monitor-share-outline" size={20} color={COLORS.primary} />
-      </TouchableOpacity>
-
-      {/* Camera */}
-      <TouchableOpacity
-        style={styles.liveCircle}
-        onPress={() => Alert.alert('Camera', 'Coming in next update.')}
-        activeOpacity={0.8}
-      >
-        <MaterialCommunityIcons name="camera-outline" size={20} color={COLORS.primary} />
-      </TouchableOpacity>
-
-      {/* Central animated listening pill */}
-      <Animated.View style={[styles.livePill, { transform: [{ scaleX: pulseAnim }], opacity: glowOpacity }]}>
-        <MaterialCommunityIcons name="waveform" size={22} color="#fff" />
-        <Text style={styles.livePillText}>Listening…</Text>
-      </Animated.View>
-
-      {/* Mic */}
-      <TouchableOpacity style={[styles.liveCircle, styles.liveCircleMic]} activeOpacity={0.8}>
-        <MaterialCommunityIcons name="microphone" size={20} color="#fff" />
-      </TouchableOpacity>
-
-      {/* Exit */}
-      <TouchableOpacity style={[styles.liveCircle, styles.liveCircleExit]} onPress={onExit} activeOpacity={0.8}>
-        <MaterialCommunityIcons name="close" size={20} color={COLORS.error} />
-      </TouchableOpacity>
-    </View>
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable style={styles.moreOverlay} onPress={onClose}>
+        <View style={[styles.moreMenu, { top: topOffset }]}>
+          {items.map((it, i) => (
+            <TouchableOpacity
+              key={it.key}
+              style={[styles.moreItem, i === items.length - 1 && { borderBottomWidth: 0 }]}
+              onPress={() => { onClose(); onAction(it.key); }}
+              activeOpacity={0.7}
+            >
+              <MaterialCommunityIcons
+                name={it.icon as any}
+                size={19}
+                color={it.destructive ? COLORS.error : COLORS.primary}
+              />
+              <Text style={[styles.moreLabel, it.destructive && { color: COLORS.error }]}>{it.label}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      </Pressable>
+    </Modal>
   );
 }
 
@@ -385,7 +382,8 @@ function InputBar({
 function BottomNav({ tab, onTab, role, bottomInset = 0 }: { tab: TabId; onTab: (t: TabId) => void; role: UserRole | null | undefined; bottomInset?: number }) {
   const items = getNavItems(role);
   return (
-    <View style={[styles.bottomNav, { paddingBottom: bottomInset > 0 ? bottomInset : 8 }]}>
+    <View style={[styles.bottomNavWrap, { paddingBottom: (bottomInset > 0 ? bottomInset : 10) + 6 }]}>
+      <View style={styles.bottomNav}>
       {items.map((item) => {
         const active = tab === item.id;
         return (
@@ -401,6 +399,7 @@ function BottomNav({ tab, onTab, role, bottomInset = 0 }: { tab: TabId; onTab: (
           </TouchableOpacity>
         );
       })}
+      </View>
     </View>
   );
 }
@@ -545,6 +544,7 @@ export default function ChatScreen() {
   const [plusOpen, setPlusOpen] = useState(false);
   const [liveMode, setLiveMode] = useState(false);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
   const inputRef = useRef<TextInput>(null);
   const chatIdRef = useRef(`chat_${Date.now()}`);
   const abortRef = useRef<AbortController | null>(null);
@@ -616,6 +616,33 @@ export default function ChatScreen() {
     setLoading(false);
   }
 
+  async function handleMoreAction(key: string) {
+    switch (key) {
+      case 'share': {
+        const transcript = messages.length
+          ? messages.map((m) => `${m.role === 'user' ? 'You' : 'LegalBridge'}: ${m.content}`).join('\n\n')
+          : 'Check out LegalBridge — Nigerian legal research and guidance in your pocket.';
+        try { await Share.share({ message: transcript }); } catch {}
+        break;
+      }
+      case 'save':
+        Alert.alert('Saved', 'This conversation has been saved to My Cases.');
+        break;
+      case 'search':
+        router.push('/(main)/history');
+        break;
+      case 'report':
+        Linking.openURL('mailto:support@legalbridge.ng?subject=Report%20a%20problem').catch(() => {});
+        break;
+      case 'clear':
+        Alert.alert('Clear conversation', 'This will remove the current conversation. Continue?', [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Clear', style: 'destructive', onPress: () => { clearChat(); chatIdRef.current = `chat_${Date.now()}`; } },
+        ]);
+        break;
+    }
+  }
+
   const inputState: 'idle' | 'typing' | 'generating' = isLoading ? 'generating' : inputText.trim() ? 'typing' : 'idle';
   const showChatInput = tab === 'chat';
 
@@ -637,9 +664,15 @@ export default function ChatScreen() {
           </Text>
         )}
         {tab === 'chat' && <View style={{ flex: 1 }} />}
-        <TouchableOpacity style={styles.headerBtn} onPress={startNewCase}>
-          <MaterialCommunityIcons name="square-edit-outline" size={22} color={COLORS.text} />
-        </TouchableOpacity>
+        <View style={styles.headerActions}>
+          <TouchableOpacity style={styles.headerActionBtn} onPress={startNewCase}>
+            <MaterialCommunityIcons name="square-edit-outline" size={22} color={COLORS.text} />
+          </TouchableOpacity>
+          <View style={styles.headerActionDivider} />
+          <TouchableOpacity style={styles.headerActionBtn} onPress={() => setMoreOpen(true)}>
+            <MaterialCommunityIcons name="dots-horizontal" size={22} color={COLORS.text} />
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* Content — takes all remaining space */}
@@ -666,18 +699,16 @@ export default function ChatScreen() {
 
       {/* Input bar — independent from nav, floats above keyboard. Same on home & in conversation. */}
       {showChatInput && (
-        liveMode
-          ? <LiveBar onExit={() => setLiveMode(false)} />
-          : <InputBar
-              inputText={inputText}
-              setInputText={setInputText}
-              inputState={inputState}
-              onSend={() => sendMessage()}
-              onStop={stopGeneration}
-              onPlus={() => setPlusOpen(true)}
-              onLive={() => setLiveMode(true)}
-              inputRef={inputRef}
-            />
+        <InputBar
+          inputText={inputText}
+          setInputText={setInputText}
+          inputState={inputState}
+          onSend={() => sendMessage()}
+          onStop={stopGeneration}
+          onPlus={() => setPlusOpen(true)}
+          onLive={() => setLiveMode(true)}
+          inputRef={inputRef}
+        />
       )}
 
       {/* Bottom nav — hides when keyboard is open. Inset lives inside the nav so its surface reaches the screen edge. */}
@@ -687,6 +718,13 @@ export default function ChatScreen() {
 
       <SideDrawer visible={drawerOpen} onClose={() => setDrawerOpen(false)} onNavigate={navigate} />
       <PlusSheet visible={plusOpen} onClose={() => setPlusOpen(false)} />
+      <MoreMenu
+        visible={moreOpen}
+        onClose={() => setMoreOpen(false)}
+        onAction={handleMoreAction}
+        topOffset={insets.top + 60}
+      />
+      <LiveCamera visible={liveMode} onClose={() => setLiveMode(false)} />
     </KeyboardAvoidingView>
   );
 }
@@ -699,16 +737,52 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: 16, paddingVertical: 10,
+    backgroundColor: COLORS.background,
+  },
+  headerBtn: {
+    width: 44, height: 44, borderRadius: 22,
+    alignItems: 'center', justifyContent: 'center',
     backgroundColor: COLORS.surface,
+    borderWidth: 1, borderColor: COLORS.border,
+    shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 10,
+    shadowOffset: { width: 0, height: 3 }, elevation: 5,
+  },
+  // Grouped right-side actions (edit + ...) in one floating pill
+  headerActions: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: COLORS.surface,
+    borderRadius: 24,
+    borderWidth: 1, borderColor: COLORS.border,
+    paddingHorizontal: 4,
+    shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 10,
+    shadowOffset: { width: 0, height: 3 }, elevation: 5,
+  },
+  headerActionBtn: { width: 40, height: 44, alignItems: 'center', justifyContent: 'center' },
+  headerActionDivider: { width: StyleSheet.hairlineWidth, height: 22, backgroundColor: COLORS.border },
+  // "More" dropdown
+  moreOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.12)' },
+  moreMenu: {
+    position: 'absolute', right: 16,
+    minWidth: 220,
+    backgroundColor: COLORS.surface, borderRadius: 16,
+    borderWidth: 1, borderColor: COLORS.border,
+    paddingVertical: 4,
+    shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 20,
+    shadowOffset: { width: 0, height: 8 }, elevation: 12,
+  },
+  moreItem: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    paddingHorizontal: 16, paddingVertical: 13,
     borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: COLORS.border,
   },
-  headerBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
+  moreLabel: { fontSize: 15, color: COLORS.text, fontWeight: '500' },
   headerWordmark: { fontSize: 20, fontWeight: '700' },
 
   // Home — clean minimal
   homeMinimal: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32 },
   lbLogoImg: { width: 110, height: 110 },
-  homeGreeting: { fontSize: 17, fontWeight: '500', color: COLORS.text, lineHeight: 26, marginTop: 20, textAlign: 'center' },
+  homeGreeting: { fontSize: 19, fontWeight: '700', color: COLORS.text, lineHeight: 26, marginTop: 20, textAlign: 'center' },
+  homeSubGreeting: { fontSize: 15, fontWeight: '500', color: COLORS.textSecondary, lineHeight: 22, marginTop: 6, textAlign: 'center' },
 
   // Messages
   messageList: { paddingVertical: 16 },
@@ -794,11 +868,20 @@ const styles = StyleSheet.create({
   },
   livePillText: { color: '#fff', fontSize: 13, fontWeight: '700' },
 
-  // Bottom nav — independent, sits at very bottom with no connection to input bar
+  // Bottom nav — grouped into a single floating rounded pill, spaced above the bottom edge
+  bottomNavWrap: {
+    paddingHorizontal: 16,
+    paddingTop: 6,
+    backgroundColor: 'transparent',
+  },
   bottomNav: {
-    flexDirection: 'row', backgroundColor: COLORS.surface,
-    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: COLORS.border,
-    paddingTop: 8, paddingHorizontal: 8,
+    flexDirection: 'row',
+    backgroundColor: COLORS.surface,
+    borderRadius: 30,
+    paddingVertical: 8, paddingHorizontal: 6,
+    borderWidth: 1, borderColor: COLORS.border,
+    shadowColor: '#000', shadowOpacity: 0.12, shadowRadius: 16,
+    shadowOffset: { width: 0, height: 6 }, elevation: 10,
   },
   navItem: { flex: 1, alignItems: 'center', gap: 3 },
   navPill: { width: 48, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
