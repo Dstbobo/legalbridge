@@ -1,4 +1,4 @@
-import { Audio } from 'expo-av';
+import { AudioModule, setAudioModeAsync, createAudioPlayer, type AudioPlayer } from 'expo-audio';
 import * as FileSystem from 'expo-file-system/legacy';
 import LiveAudioStream from 'react-native-live-audio-stream';
 import { type UserRole } from '@/constants/roles';
@@ -99,7 +99,7 @@ export class LiveSession {
   private userId: string | null;
   private micActive = false;
   private pcmChunks: string[] = []; // base64 PCM16 @24k from Gemini (current turn)
-  private sound: Audio.Sound | null = null;
+  private player: AudioPlayer | null = null;
   private closed = false;
   private setupDone = false;
   private chunksSent = 0;
@@ -132,17 +132,17 @@ export class LiveSession {
     }
 
     try {
-      const perm = await Audio.requestPermissionsAsync();
+      const perm = await AudioModule.requestRecordingPermissionsAsync();
       log('mic permission granted =', perm.granted);
       if (!perm.granted) {
         this.cb.onStatus?.('error');
         throw new Error('Microphone permission denied');
       }
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
-        staysActiveInBackground: false,
-        playThroughEarpieceAndroid: false, // loudspeaker — with audioSource=6 avoids echo
+      await setAudioModeAsync({
+        allowsRecording: true,
+        playsInSilentMode: true,
+        shouldPlayInBackground: false,
+        shouldRouteThroughEarpiece: false, // loudspeaker — with audioSource=6 avoids echo
       });
     } catch (e) {
       log('audio setup failed:', (e as Error)?.message);
@@ -335,14 +335,15 @@ export class LiveSession {
       await FileSystem.writeAsStringAsync(path, wavB64, { encoding: FileSystem.EncodingType.Base64 });
       await this.stopPlayback();
       this.playingBack = true;
-      const { sound } = await Audio.Sound.createAsync({ uri: path }, { shouldPlay: true });
-      this.sound = sound;
-      sound.setOnPlaybackStatusUpdate((st: any) => {
-        if (st.didJustFinish) {
+      const player = createAudioPlayer({ uri: path });
+      this.player = player;
+      player.addListener('playbackStatusUpdate', (st: any) => {
+        if (st?.didJustFinish) {
           this.stopPlayback();
           this.cb.onStatus?.('listening');
         }
       });
+      player.play();
     } catch (e) {
       log('playback failed:', (e as Error)?.message);
       this.playingBack = false;
@@ -350,11 +351,11 @@ export class LiveSession {
   }
 
   private async stopPlayback() {
-    const s = this.sound;
-    this.sound = null;
+    const p = this.player;
+    this.player = null;
     this.playingBack = false;
-    if (s) {
-      try { await s.stopAsync(); await s.unloadAsync(); } catch {}
+    if (p) {
+      try { p.remove(); } catch {}
     }
   }
 
