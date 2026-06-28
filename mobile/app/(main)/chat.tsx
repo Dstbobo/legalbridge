@@ -11,12 +11,16 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useChatStore, type Message } from '@/stores/chat.store';
 import { useAuthStore } from '@/stores/auth.store';
-import { streamChat } from '@/services/chat.service';
+import { useDocumentsStore, deriveDocTitle } from '@/stores/documents.store';
+import { streamChat, streamDocument } from '@/services/chat.service';
+import { copyDocument, shareDocumentPdf, printDocument } from '@/services/documentActions';
 import { Image } from 'react-native';
 import { isLawyer, isLawStudent, type UserRole } from '@/constants/roles';
 import DiscoveryScreen from './discovery';
 import ClientsScreen from './clients';
 import LiveCamera from '@/components/LiveCamera';
+
+type ChatMode = 'assistant' | 'draft';
 
 const LB_LOGO = require('@/assets/logo.png');
 import { COLORS } from '@/constants/theme';
@@ -173,11 +177,43 @@ function MessageBubble({ message }: { message: Message }) {
         </Markdown>
       )}
       {message.isDocument && !message.isStreaming && (
-        <View style={styles.docTag}>
-          <MaterialCommunityIcons name="file-document-outline" size={12} color={COLORS.accent} />
-          <Text style={styles.docTagText}>Legal Document</Text>
-        </View>
+        <DocumentActions content={message.content} />
       )}
+    </View>
+  );
+}
+
+// ── Document action bar (under a generated legal document) ──────────────────
+function DocumentActions({ content }: { content: string }) {
+  const { saveDocument } = useDocumentsStore();
+  const [saved, setSaved] = useState(false);
+  const title = deriveDocTitle(content);
+
+  const actions = [
+    { key: 'copy', icon: 'content-copy', label: 'Copy',
+      onPress: async () => { await copyDocument(content); Alert.alert('Copied', 'Document copied to clipboard.'); } },
+    { key: 'share', icon: 'share-variant', label: 'Share',
+      onPress: () => shareDocumentPdf(title, content) },
+    { key: 'print', icon: 'printer', label: 'Print',
+      onPress: () => printDocument(title, content) },
+    { key: 'save', icon: saved ? 'check' : 'content-save-outline', label: saved ? 'Saved' : 'Save',
+      onPress: async () => { await saveDocument(title, content); setSaved(true); } },
+  ];
+
+  return (
+    <View>
+      <View style={styles.docTag}>
+        <MaterialCommunityIcons name="file-document-outline" size={12} color={COLORS.accent} />
+        <Text style={styles.docTagText}>Legal Document</Text>
+      </View>
+      <View style={styles.docActions}>
+        {actions.map((a) => (
+          <TouchableOpacity key={a.key} style={styles.docActionBtn} onPress={a.onPress} activeOpacity={0.7}>
+            <MaterialCommunityIcons name={a.icon as any} size={18} color={COLORS.primary} />
+            <Text style={styles.docActionLabel}>{a.label}</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
     </View>
   );
 }
@@ -545,6 +581,8 @@ export default function ChatScreen() {
   const [liveMode, setLiveMode] = useState(false);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
+  const [mode, setMode] = useState<ChatMode>('assistant');
+  const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const inputRef = useRef<TextInput>(null);
   const chatIdRef = useRef(`chat_${Date.now()}`);
   const abortRef = useRef<AbortController | null>(null);
@@ -578,14 +616,16 @@ export default function ChatScreen() {
     setInputText('');
     setLoading(true);
     addUserMessage(content);
+    const isDraft = mode === 'draft';
     const aiMsgId = Math.random().toString(36).slice(2);
-    startStreaming(aiMsgId, false);
+    startStreaming(aiMsgId, isDraft);
     scrollToBottom();
 
     const abort = new AbortController();
     abortRef.current = abort;
     try {
-      await streamChat(content, chatIdRef.current, (chunk) => {
+      const stream = isDraft ? streamDocument : streamChat;
+      await stream(content, chatIdRef.current, (chunk) => {
         appendStream(chunk);
         scrollToBottom();
       }, abort.signal);
@@ -663,7 +703,23 @@ export default function ChatScreen() {
             <Text style={{ color: COLORS.accent, fontStyle: 'italic' }}>Bridge</Text>
           </Text>
         )}
-        {tab === 'chat' && <View style={{ flex: 1 }} />}
+        {tab === 'chat' && (
+          <View style={styles.headerCenter}>
+            <TouchableOpacity
+              style={styles.modePill}
+              onPress={() => setModeMenuOpen(true)}
+              activeOpacity={0.8}
+            >
+              <MaterialCommunityIcons
+                name={mode === 'draft' ? 'file-document-edit-outline' : 'message-text-outline'}
+                size={16}
+                color={COLORS.primary}
+              />
+              <Text style={styles.modePillText}>{mode === 'draft' ? 'Draft' : 'Assistant'}</Text>
+              <MaterialCommunityIcons name="chevron-down" size={16} color={COLORS.textSecondary} />
+            </TouchableOpacity>
+          </View>
+        )}
         <View style={styles.headerActions}>
           <TouchableOpacity style={styles.headerActionBtn} onPress={startNewCase}>
             <MaterialCommunityIcons name="square-edit-outline" size={22} color={COLORS.text} />
@@ -725,6 +781,35 @@ export default function ChatScreen() {
         topOffset={insets.top + 60}
       />
       <LiveCamera visible={liveMode} onClose={() => setLiveMode(false)} />
+
+      {/* Mode switcher dropdown — Assistant vs Draft Document */}
+      <Modal visible={modeMenuOpen} transparent animationType="fade" onRequestClose={() => setModeMenuOpen(false)}>
+        <Pressable style={styles.modeOverlay} onPress={() => setModeMenuOpen(false)}>
+          <View style={[styles.modeMenu, { top: insets.top + 56 }]}>
+            {([
+              { id: 'assistant' as ChatMode, icon: 'message-text-outline', title: 'Assistant', desc: 'Ask questions, get legal guidance' },
+              { id: 'draft' as ChatMode, icon: 'file-document-edit-outline', title: 'Draft Document', desc: 'Generate contracts, letters, affidavits' },
+            ]).map((m) => {
+              const active = mode === m.id;
+              return (
+                <TouchableOpacity
+                  key={m.id}
+                  style={[styles.modeItem, active && styles.modeItemActive]}
+                  onPress={() => { setMode(m.id); setModeMenuOpen(false); }}
+                  activeOpacity={0.8}
+                >
+                  <MaterialCommunityIcons name={m.icon as any} size={22} color={active ? COLORS.primary : COLORS.textSecondary} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.modeItemTitle, active && { color: COLORS.primary }]}>{m.title}</Text>
+                    <Text style={styles.modeItemDesc}>{m.desc}</Text>
+                  </View>
+                  {active && <MaterialCommunityIcons name="check" size={18} color={COLORS.primary} />}
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </Pressable>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
@@ -759,6 +844,41 @@ const styles = StyleSheet.create({
   },
   headerActionBtn: { width: 40, height: 44, alignItems: 'center', justifyContent: 'center' },
   headerActionDivider: { width: StyleSheet.hairlineWidth, height: 22, backgroundColor: COLORS.border },
+  // Mode switcher (Assistant / Draft)
+  headerCenter: { flex: 1, alignItems: 'center' },
+  modePill: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    backgroundColor: COLORS.surface, borderRadius: 20,
+    borderWidth: 1, borderColor: COLORS.border,
+    paddingVertical: 6, paddingHorizontal: 12,
+  },
+  modePillText: { fontSize: 14, fontWeight: '700', color: COLORS.text },
+  modeOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.12)' },
+  modeMenu: {
+    position: 'absolute', alignSelf: 'center', width: 300,
+    backgroundColor: COLORS.surface, borderRadius: 16,
+    borderWidth: 1, borderColor: COLORS.border, padding: 6,
+    shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 20,
+    shadowOffset: { width: 0, height: 8 }, elevation: 12,
+  },
+  modeItem: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    paddingHorizontal: 12, paddingVertical: 12, borderRadius: 12,
+  },
+  modeItemActive: { backgroundColor: `${COLORS.primary}10` },
+  modeItemTitle: { fontSize: 15, fontWeight: '700', color: COLORS.text },
+  modeItemDesc: { fontSize: 12, color: COLORS.textSecondary, marginTop: 1 },
+  // Document action bar
+  docActions: {
+    flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10,
+  },
+  docActionBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    backgroundColor: `${COLORS.primary}0d`, borderRadius: 10,
+    borderWidth: 1, borderColor: `${COLORS.primary}30`,
+    paddingVertical: 8, paddingHorizontal: 12,
+  },
+  docActionLabel: { fontSize: 13, fontWeight: '700', color: COLORS.primary },
   // "More" dropdown
   moreOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.12)' },
   moreMenu: {

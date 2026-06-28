@@ -47,7 +47,8 @@
           "cameraPermission": "LegalBridge uses the camera so you can point at documents, contracts or notes and discuss them live with LegalBridge AI.",
           "recordAudioAndroid": true
         }
-      ]
+      ],
+      "expo-sharing"
     ],
     "experiments": {
       "typedRoutes": true
