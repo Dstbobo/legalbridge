@@ -384,7 +384,7 @@ function handleSearch(systemPrompt: string, messages: any[]): Response {
 // ════════════════════════════════════════════════════════════════════
 // TOOL: vision — Claude Sonnet vision streaming
 // ════════════════════════════════════════════════════════════════════
-function handleVision(systemPrompt: string, images: any[], userText: string): Response {
+function handleVision(systemPrompt: string, images: any[], userText: string, documents: any[] = []): Response {
   const claudeContent: any[] = [];
   for (let i = 0; i < images.length; i++) {
     if (images.length > 1) claudeContent.push({ type: 'text', text: `--- PAGE ${i + 1} OF ${images.length} ---` });
@@ -394,6 +394,17 @@ function handleVision(systemPrompt: string, images: any[], userText: string): Re
         type: 'base64',
         media_type: images[i].mimeType || 'image/jpeg',
         data: images[i].data,
+      },
+    });
+  }
+  // Native PDF documents (Claude reads PDFs directly).
+  for (let i = 0; i < documents.length; i++) {
+    claudeContent.push({
+      type: 'document',
+      source: {
+        type: 'base64',
+        media_type: documents[i].mimeType || 'application/pdf',
+        data: documents[i].data,
       },
     });
   }
@@ -605,12 +616,13 @@ serve(async (req) => {
   try {
     const body = await req.json();
     const {
-      tool     = 'search',
-      messages = [],
-      images   = [],
-      userType = 'other',
-      profile  = {},
-      summary  = '',
+      tool      = 'search',
+      messages  = [],
+      images    = [],
+      documents = [],
+      userType  = 'other',
+      profile   = {},
+      summary   = '',
     } = body;
 
     const lastMsg = messages[messages.length - 1]?.content || '';
@@ -626,13 +638,13 @@ serve(async (req) => {
 
     if (tool === 'vision') {
       const systemPrompt = buildVisionPrompt(userType, profile) + stateExtras + summaryCtx;
-      if (!images || images.length === 0) {
+      if ((!images || images.length === 0) && (!documents || documents.length === 0)) {
         return new Response(
-          JSON.stringify({ error: 'No images provided for vision tool' }),
+          JSON.stringify({ error: 'No images or documents provided for vision tool' }),
           { status: 400, headers: { ...CORS, 'Content-Type': 'application/json' } }
         );
       }
-      return handleVision(systemPrompt, images, lastMsg);
+      return handleVision(systemPrompt, images, lastMsg, documents);
     }
 
     if (tool === 'evidence') {

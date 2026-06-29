@@ -12,8 +12,12 @@ import { useRouter } from 'expo-router';
 import { useChatStore, type Message } from '@/stores/chat.store';
 import { useAuthStore } from '@/stores/auth.store';
 import { useDocumentsStore, deriveDocTitle } from '@/stores/documents.store';
-import { streamChat, streamDocument } from '@/services/chat.service';
+import { streamChat, streamDocument, streamVision } from '@/services/chat.service';
 import { copyDocument, shareDocumentPdf, printDocument } from '@/services/documentActions';
+import * as ImagePicker from 'expo-image-picker';
+import * as DocumentPicker from 'expo-document-picker';
+import * as ImageManipulator from 'expo-image-manipulator';
+import * as FileSystem from 'expo-file-system/legacy';
 import { Image } from 'react-native';
 import { isLawyer, isLawStudent, type UserRole } from '@/constants/roles';
 import DiscoveryScreen from './discovery';
@@ -289,24 +293,35 @@ function SideDrawer({ visible, onClose, onNavigate }: {
 }
 
 // ── Plus sheet ────────────────────────────────────────────────────────────
-function PlusSheet({ visible, onClose }: { visible: boolean; onClose: () => void }) {
-  const soon = () => { Alert.alert('Coming Soon', 'Available in the next update.'); onClose(); };
+function PlusSheet({ visible, onClose, onTakePhoto, onGallery, onFile }: {
+  visible: boolean; onClose: () => void;
+  onTakePhoto: () => void; onGallery: () => void; onFile: () => void;
+}) {
+  const items = [
+    { icon: 'camera-outline', label: 'Take a Photo', sub: 'Snap a document and analyse it', onPress: onTakePhoto },
+    { icon: 'image-outline', label: 'Choose from Gallery', sub: 'Pick an image to analyse', onPress: onGallery },
+    { icon: 'file-pdf-box', label: 'Upload PDF or File', sub: 'Analyse a PDF document', onPress: onFile },
+  ];
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <Pressable style={styles.sheetOverlay} onPress={onClose}>
         <View style={styles.sheet}>
           <View style={styles.sheetHandle} />
           <Text style={styles.sheetTitle}>Attach</Text>
-          {[
-            { icon: 'camera-outline', label: 'Take a Photo' },
-            { icon: 'image-outline', label: 'Choose from Gallery' },
-            { icon: 'file-pdf-box', label: 'Upload PDF Document' },
-          ].map((item) => (
-            <TouchableOpacity key={item.label} style={styles.sheetItem} onPress={soon} activeOpacity={0.7}>
+          {items.map((item) => (
+            <TouchableOpacity
+              key={item.label}
+              style={styles.sheetItem}
+              onPress={() => { onClose(); setTimeout(item.onPress, 250); }}
+              activeOpacity={0.7}
+            >
               <View style={styles.sheetIcon}>
                 <MaterialCommunityIcons name={item.icon as any} size={24} color={COLORS.primary} />
               </View>
-              <Text style={styles.sheetLabel}>{item.label}</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.sheetLabel}>{item.label}</Text>
+                <Text style={styles.sheetSub}>{item.sub}</Text>
+              </View>
               <MaterialCommunityIcons name="chevron-right" size={20} color={COLORS.border} />
             </TouchableOpacity>
           ))}
@@ -658,6 +673,77 @@ export default function ChatScreen() {
     setLoading(false);
   }
 
+  // ── Attachments → vision analysis ──
+  async function runVision(label: string, question: string, attachments: { images?: any[]; documents?: any[] }) {
+    if (isLoading) return;
+    setTab('chat');
+    addUserMessage(label);
+    setLoading(true);
+    const aiMsgId = Math.random().toString(36).slice(2);
+    startStreaming(aiMsgId, false);
+    scrollToBottom();
+    const abort = new AbortController();
+    abortRef.current = abort;
+    const userType = isLawyer(user?.role) ? 'lawyer' : isLawStudent(user?.role) ? 'student' : 'other';
+    try {
+      await streamVision(question, attachments, (chunk) => { appendStream(chunk); scrollToBottom(); }, abort.signal, { userType });
+    } catch (e: any) {
+      const isAbort = e?.name === 'AbortError' || (typeof e?.message === 'string' && /abort|cancel/i.test(e.message));
+      if (!isAbort) appendStream('\n\n_Could not analyse that file. Please try a clearer photo or a smaller PDF._');
+    } finally {
+      finaliseStream(aiMsgId);
+      abortRef.current = null;
+      setLoading(false);
+      scrollToBottom();
+    }
+  }
+
+  async function sendImageUri(uri: string, label: string) {
+    try {
+      const scaled = await ImageManipulator.manipulateAsync(
+        uri, [{ resize: { width: 1280 } }],
+        { compress: 0.6, format: ImageManipulator.SaveFormat.JPEG, base64: true },
+      );
+      if (!scaled.base64) return;
+      await runVision(label, 'Analyse this under Nigerian law. Identify the document type, read all the text, and explain it clearly for me.', {
+        images: [{ data: scaled.base64, mimeType: 'image/jpeg' }],
+      });
+    } catch {
+      Alert.alert('Could not read image', 'Please try again with a clearer photo.');
+    }
+  }
+
+  async function handleTakePhoto() {
+    const perm = await ImagePicker.requestCameraPermissionsAsync();
+    if (!perm.granted) { Alert.alert('Camera access needed', 'Enable camera access in Settings to take a photo.'); return; }
+    const res = await ImagePicker.launchCameraAsync({ quality: 0.5 });
+    if (res.canceled || !res.assets?.[0]?.uri) return;
+    await sendImageUri(res.assets[0].uri, '📷 Photo for analysis');
+  }
+
+  async function handleGallery() {
+    const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.6 });
+    if (res.canceled || !res.assets?.[0]?.uri) return;
+    await sendImageUri(res.assets[0].uri, '🖼️ Image for analysis');
+  }
+
+  async function handleFile() {
+    const res = await DocumentPicker.getDocumentAsync({ type: ['image/*', 'application/pdf'], copyToCacheDirectory: true });
+    if (res.canceled || !res.assets?.[0]) return;
+    const asset = res.assets[0];
+    const mime = asset.mimeType || '';
+    if (mime.startsWith('image/')) { await sendImageUri(asset.uri, `🖼️ ${asset.name || 'Image'}`); return; }
+    try {
+      const b64 = await FileSystem.readAsStringAsync(asset.uri, { encoding: FileSystem.EncodingType.Base64 });
+      if (b64.length > 28_000_000) { Alert.alert('File too large', 'Please choose a PDF under about 20 MB.'); return; }
+      await runVision(`📄 ${asset.name || 'PDF document'}`, 'Analyse this document under Nigerian law. Identify its type, summarise it, and flag anything important I should know.', {
+        documents: [{ data: b64, mimeType: mime || 'application/pdf' }],
+      });
+    } catch {
+      Alert.alert('Could not read file', 'Please try a different file.');
+    }
+  }
+
   async function handleMoreAction(key: string) {
     switch (key) {
       case 'share': {
@@ -775,7 +861,13 @@ export default function ChatScreen() {
       )}
 
       <SideDrawer visible={drawerOpen} onClose={() => setDrawerOpen(false)} onNavigate={navigate} />
-      <PlusSheet visible={plusOpen} onClose={() => setPlusOpen(false)} />
+      <PlusSheet
+        visible={plusOpen}
+        onClose={() => setPlusOpen(false)}
+        onTakePhoto={handleTakePhoto}
+        onGallery={handleGallery}
+        onFile={handleFile}
+      />
       <MoreMenu
         visible={moreOpen}
         onClose={() => setMoreOpen(false)}
@@ -1054,7 +1146,8 @@ const styles = StyleSheet.create({
   sheetTitle: { fontSize: 13, fontWeight: '700', color: COLORS.textSecondary, marginBottom: 12, textTransform: 'uppercase', letterSpacing: 0.5 },
   sheetItem: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 14 },
   sheetIcon: { width: 46, height: 46, borderRadius: 23, backgroundColor: COLORS.secondary, alignItems: 'center', justifyContent: 'center' },
-  sheetLabel: { flex: 1, fontSize: 16, color: COLORS.text, fontWeight: '500' },
+  sheetLabel: { fontSize: 16, color: COLORS.text, fontWeight: '600' },
+  sheetSub: { fontSize: 12.5, color: COLORS.textSecondary, marginTop: 1 },
   sheetCancel: { marginTop: 8, alignItems: 'center', paddingVertical: 14 },
   sheetCancelText: { fontSize: 16, color: COLORS.error, fontWeight: '600' },
 

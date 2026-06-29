@@ -89,6 +89,49 @@ export async function streamDocument(
   await _readSSE(response, onChunk);
 }
 
+export interface Attachment { data: string; mimeType: string }
+
+/** Analyse images and/or PDF documents via the chat-tools vision endpoint. */
+export async function streamVision(
+  question: string,
+  attachments: { images?: Attachment[]; documents?: Attachment[] },
+  onChunk: (text: string) => void,
+  signal?: AbortSignal,
+  opts?: { userType?: string },
+): Promise<void> {
+  const token = await getAuthToken();
+  const url = `${SUPABASE_URL}/functions/v1/chat-tools`;
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+        apikey: SUPABASE_ANON_KEY,
+      },
+      body: JSON.stringify({
+        tool: 'vision',
+        messages: [{ role: 'user', content: question }],
+        images: attachments.images ?? [],
+        documents: attachments.documents ?? [],
+        userType: opts?.userType ?? 'other',
+      }),
+      signal,
+    });
+  } catch (e: any) {
+    throw new Error(`Network error: ${e?.message ?? e}`);
+  }
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => '(no body)');
+    throw new Error(`vision ${response.status}: ${text.slice(0, 300)}`);
+  }
+
+  await _readSSE(response, onChunk);
+}
+
 async function _readSSE(response: Response, onChunk: (text: string) => void) {
   const reader = response.body?.getReader();
   if (!reader) throw new Error('No response body from server');

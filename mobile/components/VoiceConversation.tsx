@@ -6,6 +6,7 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImageManipulator from 'expo-image-manipulator';
+import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { useAuthStore } from '@/stores/auth.store';
 import { useChatStore } from '@/stores/chat.store';
 import { ROLE_LABELS } from '@/constants/roles';
@@ -81,6 +82,8 @@ export default function VoiceConversation({ visible, onClose }: { visible: boole
   // Session lifecycle.
   useEffect(() => {
     if (!visible) return;
+    // Keep the screen on for the whole live session.
+    activateKeepAwakeAsync('voice').catch(() => {});
     const history = messages
       .slice(-8)
       .map((m) => ({ role: m.role === 'user' ? ('user' as const) : ('assistant' as const), content: m.content }));
@@ -100,6 +103,7 @@ export default function VoiceConversation({ visible, onClose }: { visible: boole
     sessionRef.current = session;
     session.connect().catch((e) => { setStatus('error'); setErrorDetail((prev) => prev || String(e?.message ?? e)); });
     return () => {
+      deactivateKeepAwake('voice');
       stopFrames();
       session.close();
       sessionRef.current = null;
