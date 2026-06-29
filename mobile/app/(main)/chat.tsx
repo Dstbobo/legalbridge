@@ -9,6 +9,7 @@ import Markdown from 'react-native-markdown-display';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useChatStore, type Message } from '@/stores/chat.store';
 import { useAuthStore } from '@/stores/auth.store';
 import { useDocumentsStore, deriveDocTitle } from '@/stores/documents.store';
@@ -19,6 +20,35 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as FileSystem from 'expo-file-system/legacy';
 import { Image } from 'react-native';
+
+const RECENT_SESSIONS_KEY = 'lb_recent_sessions';
+const MAX_RECENT = 12;
+
+type RecentSession = { id: string; title: string; ts: number };
+
+async function loadRecentSessions(): Promise<RecentSession[]> {
+  try {
+    const raw = await AsyncStorage.getItem(RECENT_SESSIONS_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+}
+
+async function saveRecentSession(session: RecentSession) {
+  try {
+    const existing = await loadRecentSessions();
+    const filtered = existing.filter((s) => s.id !== session.id);
+    const next = [session, ...filtered].slice(0, MAX_RECENT);
+    await AsyncStorage.setItem(RECENT_SESSIONS_KEY, JSON.stringify(next));
+  } catch {}
+}
+
+type StagedAttachment = {
+  id: string;
+  label: string;
+  thumbUri?: string;
+  base64: string;
+  mimeType: string;
+};
 import { isLawyer, isLawStudent, type UserRole } from '@/constants/roles';
 import DiscoveryScreen from './discovery';
 import ClientsScreen from './clients';
@@ -99,11 +129,6 @@ function getDefaultTab(role: UserRole | null | undefined): TabId {
 }
 
 // ── Smart home screen ─────────────────────────────────────────────────────
-const RECENT_CASES = [
-  'Landlord Eviction — Lagos 2024',
-  'Employment Termination Review',
-  'Contract Breach — Okonkwo v. DST',
-];
 
 function getTimeGreeting() {
   const h = new Date().getHours();
@@ -139,8 +164,7 @@ function getFollowUp(role: UserRole | null | undefined, hasHistory: boolean, var
   return opts[variant % opts.length];
 }
 
-function HomeScreen({ onSend, user }: { onSend: (t: string) => void; user: any }) {
-  const hasHistory = RECENT_CASES.length > 0;
+function HomeScreen({ onSend, user, hasHistory }: { onSend: (t: string) => void; user: any; hasHistory: boolean }) {
   const firstName = user?.fullName?.split(' ')[0] ?? user?.email?.split('@')[0] ?? 'there';
   // Pick a stable variant for this screen open (not on every keystroke/re-render).
   const variant = React.useMemo(() => Math.floor(Math.random() * 3), []);
@@ -201,7 +225,12 @@ function DocumentActions({ content }: { content: string }) {
     { key: 'print', icon: 'printer', label: 'Print',
       onPress: () => printDocument(title, content) },
     { key: 'save', icon: saved ? 'check' : 'content-save-outline', label: saved ? 'Saved' : 'Save',
-      onPress: async () => { await saveDocument(title, content); setSaved(true); } },
+      onPress: async () => {
+        if (!content || !content.trim()) { Alert.alert('Nothing to save', 'This document is still empty.'); return; }
+        await saveDocument(title, content);
+        setSaved(true);
+        Alert.alert('Saved', 'Document saved to My Documents.');
+      } },
   ];
 
   return (
@@ -223,8 +252,9 @@ function DocumentActions({ content }: { content: string }) {
 }
 
 // ── Side drawer ───────────────────────────────────────────────────────────
-function SideDrawer({ visible, onClose, onNavigate }: {
+function SideDrawer({ visible, onClose, onNavigate, recentSessions }: {
   visible: boolean; onClose: () => void; onNavigate: (r: string) => void;
+  recentSessions: RecentSession[];
 }) {
   const { clearChat } = useChatStore();
   const menuItems = [
@@ -270,10 +300,12 @@ function SideDrawer({ visible, onClose, onNavigate }: {
 
             <View style={styles.drawerDivider} />
             <Text style={styles.recentLabel}>RECENT</Text>
-            {RECENT_CASES.map((c) => (
-              <TouchableOpacity key={c} style={styles.recentItem} onPress={onClose} activeOpacity={0.7}>
-                <MaterialCommunityIcons name="file-document-outline" size={16} color={COLORS.textSecondary} />
-                <Text style={styles.recentText} numberOfLines={1}>{c}</Text>
+            {recentSessions.length === 0 ? (
+              <Text style={styles.recentEmpty}>Your recent chats will appear here.</Text>
+            ) : recentSessions.map((s) => (
+              <TouchableOpacity key={s.id} style={styles.recentItem} onPress={onClose} activeOpacity={0.7}>
+                <MaterialCommunityIcons name="message-text-outline" size={16} color={COLORS.textSecondary} />
+                <Text style={styles.recentText} numberOfLines={1}>{s.title}</Text>
               </TouchableOpacity>
             ))}
           </ScrollView>
@@ -373,7 +405,7 @@ function MoreMenu({ visible, onClose, onAction, topOffset }: {
 
 // ── Input bar ─────────────────────────────────────────────────────────────
 function InputBar({
-  inputText, setInputText, inputState, onSend, onStop, onPlus, onLive, inputRef,
+  inputText, setInputText, inputState, onSend, onStop, onPlus, onLive, inputRef, hasAttachments,
 }: {
   inputText: string;
   setInputText: (t: string) => void;
@@ -383,7 +415,9 @@ function InputBar({
   onPlus: () => void;
   onLive: () => void;
   inputRef?: React.RefObject<TextInput>;
+  hasAttachments?: boolean;
 }) {
+  const canSend = inputState === 'typing' || (inputState === 'idle' && !!hasAttachments);
   return (
     <View style={styles.inputBar}>
       <View style={styles.inputPill}>
@@ -398,7 +432,7 @@ function InputBar({
           style={styles.pillInput}
           value={inputText}
           onChangeText={setInputText}
-          placeholder="Reply to LegalBridge…"
+          placeholder={hasAttachments ? 'Add a message or send…' : 'Reply to LegalBridge…'}
           placeholderTextColor={COLORS.textSecondary}
           multiline
           maxLength={2000}
@@ -410,7 +444,7 @@ function InputBar({
           <TouchableOpacity style={styles.pillActionBtn} onPress={onStop}>
             <View style={styles.stopIcon} />
           </TouchableOpacity>
-        ) : inputState === 'typing' ? (
+        ) : canSend ? (
           <TouchableOpacity style={styles.pillActionBtn} onPress={onSend}>
             <MaterialCommunityIcons name="arrow-up" size={18} color="#fff" />
           </TouchableOpacity>
@@ -598,6 +632,8 @@ export default function ChatScreen() {
   const [moreOpen, setMoreOpen] = useState(false);
   const [mode, setMode] = useState<ChatMode>('assistant');
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
+  const [staged, setStaged] = useState<StagedAttachment[]>([]);
+  const [recentSessions, setRecentSessions] = useState<RecentSession[]>([]);
   const inputRef = useRef<TextInput>(null);
   const chatIdRef = useRef(`chat_${Date.now()}`);
   const abortRef = useRef<AbortController | null>(null);
@@ -607,6 +643,10 @@ export default function ChatScreen() {
     const show = Keyboard.addListener('keyboardDidShow', () => setKeyboardVisible(true));
     const hide = Keyboard.addListener('keyboardDidHide', () => setKeyboardVisible(false));
     return () => { show.remove(); hide.remove(); };
+  }, []);
+
+  useEffect(() => {
+    loadRecentSessions().then(setRecentSessions);
   }, []);
 
   function scrollToBottom() {
@@ -622,14 +662,60 @@ export default function ChatScreen() {
   function startNewCase() {
     clearChat();
     chatIdRef.current = `chat_${Date.now()}`;
+    setStaged([]);
     setTab('chat');
   }
 
   async function sendMessage(text?: string) {
     const content = (text ?? inputText).trim();
-    if (!content || isLoading) return;
+    const attachmentsToSend = [...staged];
+    const hasAttachments = attachmentsToSend.length > 0;
+    if (!content && !hasAttachments || isLoading) return;
+
     setInputText('');
+    setStaged([]);
     setLoading(true);
+    setTab('chat');
+
+    // Save to recent sessions on first message of a chat.
+    const firstMessage = messages.length === 0;
+    const sessionTitle = content || attachmentsToSend[0]?.label || 'Untitled chat';
+    if (firstMessage) {
+      const session: RecentSession = { id: chatIdRef.current, title: sessionTitle.slice(0, 60), ts: Date.now() };
+      saveRecentSession(session);
+      setRecentSessions((prev) => [session, ...prev.filter((s) => s.id !== session.id)].slice(0, MAX_RECENT));
+    }
+
+    if (hasAttachments) {
+      // Vision path: one or more files attached.
+      const attachLabel = attachmentsToSend.map((a) => a.label).join(', ');
+      const userLabel = content ? `${content}\n\n${attachLabel}` : attachLabel;
+      addUserMessage(userLabel);
+      const aiMsgId = Math.random().toString(36).slice(2);
+      startStreaming(aiMsgId, false);
+      scrollToBottom();
+
+      const abort = new AbortController();
+      abortRef.current = abort;
+      const userType = isLawyer(user?.role) ? 'lawyer' : isLawStudent(user?.role) ? 'student' : 'other';
+      const question = content || 'Analyse this under Nigerian law. Identify the document type, read all the text, and explain it clearly.';
+      const images = attachmentsToSend.filter((a) => a.mimeType.startsWith('image/')).map((a) => ({ data: a.base64, mimeType: a.mimeType }));
+      const documents = attachmentsToSend.filter((a) => !a.mimeType.startsWith('image/')).map((a) => ({ data: a.base64, mimeType: a.mimeType }));
+      try {
+        await streamVision(question, { images, documents }, (chunk) => { appendStream(chunk); scrollToBottom(); }, abort.signal, { userType });
+      } catch (e: any) {
+        const isAbort = e?.name === 'AbortError' || /abort|cancel/i.test(e?.message ?? '');
+        if (!isAbort) appendStream('\n\n_Could not analyse that file. Please try a clearer photo or a smaller PDF._');
+      } finally {
+        finaliseStream(aiMsgId);
+        abortRef.current = null;
+        setLoading(false);
+        scrollToBottom();
+      }
+      return;
+    }
+
+    // Normal text message.
     addUserMessage(content);
     const isDraft = mode === 'draft';
     const aiMsgId = Math.random().toString(36).slice(2);
@@ -655,9 +741,8 @@ export default function ChatScreen() {
            e.message.toLowerCase().includes('canceled') ||
            e.message.toLowerCase().includes('cancelled')));
       if (!isAbort) {
-        const msg = e?.message ?? String(e);
         appendStream(`\n\n_Something went wrong. Please check your connection and try again._`);
-        console.error('[chat] stream error:', msg);
+        console.error('[chat] stream error:', e?.message ?? String(e));
       }
     } finally {
       finaliseStream(aiMsgId);
@@ -673,41 +758,21 @@ export default function ChatScreen() {
     setLoading(false);
   }
 
-  // ── Attachments → vision analysis ──
-  async function runVision(label: string, question: string, attachments: { images?: any[]; documents?: any[] }) {
-    if (isLoading) return;
-    setTab('chat');
-    addUserMessage(label);
-    setLoading(true);
-    const aiMsgId = Math.random().toString(36).slice(2);
-    startStreaming(aiMsgId, false);
-    scrollToBottom();
-    const abort = new AbortController();
-    abortRef.current = abort;
-    const userType = isLawyer(user?.role) ? 'lawyer' : isLawStudent(user?.role) ? 'student' : 'other';
-    try {
-      await streamVision(question, attachments, (chunk) => { appendStream(chunk); scrollToBottom(); }, abort.signal, { userType });
-    } catch (e: any) {
-      const isAbort = e?.name === 'AbortError' || (typeof e?.message === 'string' && /abort|cancel/i.test(e.message));
-      if (!isAbort) appendStream('\n\n_Could not analyse that file. Please try a clearer photo or a smaller PDF._');
-    } finally {
-      finaliseStream(aiMsgId);
-      abortRef.current = null;
-      setLoading(false);
-      scrollToBottom();
-    }
-  }
-
-  async function sendImageUri(uri: string, label: string) {
+  // ── Attachments → stage for send ──
+  async function stageImageUri(uri: string, label: string) {
     try {
       const scaled = await ImageManipulator.manipulateAsync(
         uri, [{ resize: { width: 1280 } }],
         { compress: 0.6, format: ImageManipulator.SaveFormat.JPEG, base64: true },
       );
       if (!scaled.base64) return;
-      await runVision(label, 'Analyse this under Nigerian law. Identify the document type, read all the text, and explain it clearly for me.', {
-        images: [{ data: scaled.base64, mimeType: 'image/jpeg' }],
-      });
+      setStaged((prev) => [...prev, {
+        id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
+        label,
+        thumbUri: scaled.uri,
+        base64: scaled.base64!,
+        mimeType: 'image/jpeg',
+      }]);
     } catch {
       Alert.alert('Could not read image', 'Please try again with a clearer photo.');
     }
@@ -718,13 +783,13 @@ export default function ChatScreen() {
     if (!perm.granted) { Alert.alert('Camera access needed', 'Enable camera access in Settings to take a photo.'); return; }
     const res = await ImagePicker.launchCameraAsync({ quality: 0.5 });
     if (res.canceled || !res.assets?.[0]?.uri) return;
-    await sendImageUri(res.assets[0].uri, '📷 Photo for analysis');
+    await stageImageUri(res.assets[0].uri, '📷 Photo');
   }
 
   async function handleGallery() {
     const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.6 });
     if (res.canceled || !res.assets?.[0]?.uri) return;
-    await sendImageUri(res.assets[0].uri, '🖼️ Image for analysis');
+    await stageImageUri(res.assets[0].uri, '🖼️ Image');
   }
 
   async function handleFile() {
@@ -732,13 +797,16 @@ export default function ChatScreen() {
     if (res.canceled || !res.assets?.[0]) return;
     const asset = res.assets[0];
     const mime = asset.mimeType || '';
-    if (mime.startsWith('image/')) { await sendImageUri(asset.uri, `🖼️ ${asset.name || 'Image'}`); return; }
+    if (mime.startsWith('image/')) { await stageImageUri(asset.uri, `🖼️ ${asset.name || 'Image'}`); return; }
     try {
       const b64 = await FileSystem.readAsStringAsync(asset.uri, { encoding: FileSystem.EncodingType.Base64 });
       if (b64.length > 28_000_000) { Alert.alert('File too large', 'Please choose a PDF under about 20 MB.'); return; }
-      await runVision(`📄 ${asset.name || 'PDF document'}`, 'Analyse this document under Nigerian law. Identify its type, summarise it, and flag anything important I should know.', {
-        documents: [{ data: b64, mimeType: mime || 'application/pdf' }],
-      });
+      setStaged((prev) => [...prev, {
+        id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
+        label: `📄 ${asset.name || 'PDF'}`,
+        base64: b64,
+        mimeType: mime || 'application/pdf',
+      }]);
     } catch {
       Alert.alert('Could not read file', 'Please try a different file.');
     }
@@ -773,6 +841,7 @@ export default function ChatScreen() {
 
   const inputState: 'idle' | 'typing' | 'generating' = isLoading ? 'generating' : inputText.trim() ? 'typing' : 'idle';
   const showChatInput = tab === 'chat';
+  const hasAttachments = staged.length > 0;
 
   return (
     <KeyboardAvoidingView
@@ -823,7 +892,7 @@ export default function ChatScreen() {
       <View style={styles.content}>
         {tab === 'chat' && (
           messages.length === 0
-            ? <HomeScreen onSend={(t) => { setTab('chat'); sendMessage(t); }} user={user} />
+            ? <HomeScreen onSend={(t) => { setTab('chat'); sendMessage(t); }} user={user} hasHistory={recentSessions.length > 0} />
             : <FlatList
                 ref={listRef}
                 data={messages}
@@ -842,6 +911,29 @@ export default function ChatScreen() {
       </View>
 
       {/* Input bar — independent from nav, floats above keyboard. Same on home & in conversation. */}
+      {/* Staged attachment preview chips */}
+      {showChatInput && hasAttachments && (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.stagedRow}
+          contentContainerStyle={styles.stagedContent}
+        >
+          {staged.map((att) => (
+            <View key={att.id} style={styles.stagedChip}>
+              {att.thumbUri
+                ? <Image source={{ uri: att.thumbUri }} style={styles.stagedThumb} />
+                : <MaterialCommunityIcons name="file-pdf-box" size={26} color={COLORS.primary} style={{ margin: 4 }} />
+              }
+              <Text style={styles.stagedChipLabel} numberOfLines={1}>{att.label}</Text>
+              <TouchableOpacity onPress={() => setStaged((prev) => prev.filter((a) => a.id !== att.id))} hitSlop={8}>
+                <MaterialCommunityIcons name="close-circle" size={18} color={COLORS.textSecondary} />
+              </TouchableOpacity>
+            </View>
+          ))}
+        </ScrollView>
+      )}
+
       {showChatInput && (
         <InputBar
           inputText={inputText}
@@ -852,6 +944,7 @@ export default function ChatScreen() {
           onPlus={() => setPlusOpen(true)}
           onLive={() => setLiveMode(true)}
           inputRef={inputRef}
+          hasAttachments={hasAttachments}
         />
       )}
 
@@ -860,7 +953,7 @@ export default function ChatScreen() {
         <BottomNav tab={tab} onTab={setTab} role={user?.role} bottomInset={insets.bottom} />
       )}
 
-      <SideDrawer visible={drawerOpen} onClose={() => setDrawerOpen(false)} onNavigate={navigate} />
+      <SideDrawer visible={drawerOpen} onClose={() => setDrawerOpen(false)} onNavigate={navigate} recentSessions={recentSessions} />
       <PlusSheet
         visible={plusOpen}
         onClose={() => setPlusOpen(false)}
@@ -1135,6 +1228,19 @@ const styles = StyleSheet.create({
   },
   recentItem: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 9, paddingHorizontal: 20 },
   recentText: { fontSize: 13, color: COLORS.text, flex: 1 },
+  recentEmpty: { fontSize: 13, color: COLORS.textSecondary, paddingHorizontal: 20, paddingBottom: 8, fontStyle: 'italic' },
+
+  // Staged attachment preview row above input bar
+  stagedRow: { maxHeight: 80, marginHorizontal: 12, marginBottom: 4 },
+  stagedContent: { flexDirection: 'row', gap: 8, alignItems: 'center', paddingVertical: 4 },
+  stagedChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: COLORS.surface, borderRadius: 12,
+    borderWidth: 1, borderColor: COLORS.border,
+    paddingHorizontal: 8, paddingVertical: 4, maxWidth: 180,
+  },
+  stagedThumb: { width: 36, height: 36, borderRadius: 8 },
+  stagedChipLabel: { fontSize: 12, color: COLORS.text, fontWeight: '600', flex: 1 },
 
   // Plus sheet
   sheetOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },

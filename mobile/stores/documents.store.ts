@@ -40,7 +40,7 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
     const doc: SavedDocument = {
       id: `doc_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
       title: title.trim() || 'Untitled document',
-      content,
+      content: (content ?? '').trim(),
       createdAt: Date.now(),
     };
     const next = [doc, ...get().documents];

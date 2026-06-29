@@ -10,7 +10,7 @@ import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { useAuthStore } from '@/stores/auth.store';
 import { useChatStore } from '@/stores/chat.store';
 import { ROLE_LABELS } from '@/constants/roles';
-import { LiveSession, type LiveStatus } from '@/services/geminiLive';
+import { LiveSession, type LiveStatus, type LiveDebug } from '@/services/geminiLive';
 import { COLORS } from '@/constants/theme';
 
 const LB_LOGO = require('@/assets/logo.png');
@@ -27,10 +27,14 @@ export default function VoiceConversation({ visible, onClose }: { visible: boole
   const [micMuted, setMicMuted] = useState(false);
   const [cameraOn, setCameraOn] = useState(false);
   const [errorDetail, setErrorDetail] = useState('');
+  const [debug, setDebug] = useState<LiveDebug | null>(null);
+  const [showDebug, setShowDebug] = useState(true);
 
   const sessionRef = useRef<LiveSession | null>(null);
   const cameraRef = useRef<CameraView>(null);
   const frameTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const capturingRef = useRef(false);
+  const cameraReadyRef = useRef(false);
   const aiScrollRef = useRef<ScrollView>(null);
 
   // Pulsing pill animation while the session is active.
@@ -64,19 +68,26 @@ export default function VoiceConversation({ visible, onClose }: { visible: boole
   const startFrames = useCallback(() => {
     if (frameTimer.current) return;
     frameTimer.current = setInterval(async () => {
+      // Never overlap captures — that freezes the preview. Skip if the previous
+      // frame is still being taken, or the camera isn't ready yet.
+      if (capturingRef.current || !cameraReadyRef.current) return;
+      const cam = cameraRef.current;
+      const session = sessionRef.current;
+      if (!cam || !session || !session.isReady) return;
+      capturingRef.current = true;
       try {
-        const cam = cameraRef.current;
-        const session = sessionRef.current;
-        if (!cam || !session || !session.isReady) return;
-        const photo = await cam.takePictureAsync({ base64: false, quality: 0.4, skipProcessing: true, shutterSound: false } as any);
-        if (!photo?.uri) return;
-        const scaled = await ImageManipulator.manipulateAsync(
-          photo.uri, [{ resize: { width: 480 } }],
-          { compress: 0.6, format: ImageManipulator.SaveFormat.JPEG, base64: true },
-        );
-        if (scaled.base64) session.sendImageFrame(scaled.base64);
-      } catch { /* skip frame */ }
-    }, 1000);
+        const photo: any = await cam.takePictureAsync({ base64: false, quality: 0.4, skipProcessing: true, shutterSound: false } as any);
+        if (photo?.uri) {
+          const scaled = await ImageManipulator.manipulateAsync(
+            photo.uri, [{ resize: { width: 480 } }],
+            { compress: 0.6, format: ImageManipulator.SaveFormat.JPEG, base64: true },
+          );
+          if (scaled.base64) session.sendImageFrame(scaled.base64);
+        }
+      } catch { /* skip frame */ } finally {
+        capturingRef.current = false;
+      }
+    }, 1500);
   }, []);
 
   // Session lifecycle.
@@ -113,14 +124,33 @@ export default function VoiceConversation({ visible, onClose }: { visible: boole
 
   useEffect(() => { aiScrollRef.current?.scrollToEnd({ animated: true }); }, [aiText]);
 
+  // Poll live diagnostics once a second while the overlay is open.
+  useEffect(() => {
+    if (!visible) return;
+    const t = setInterval(() => {
+      const d = sessionRef.current?.getDebug();
+      if (d) setDebug(d);
+    }, 1000);
+    return () => clearInterval(t);
+  }, [visible]);
+
   async function toggleCamera() {
-    if (cameraOn) { stopFrames(); setCameraOn(false); return; }
+    if (cameraOn) {
+      stopFrames();
+      cameraReadyRef.current = false;
+      capturingRef.current = false;
+      setCameraOn(false);
+      return;
+    }
     if (!camPermission?.granted) {
       const res = await requestCamPermission();
       if (!res.granted) return;
     }
+    cameraReadyRef.current = false;
     setCameraOn(true);
-    setTimeout(startFrames, 800);
+    // Start the loop now; each tick self-guards on camera-ready + session-ready,
+    // so it harmlessly no-ops until both onCameraReady and setupComplete land.
+    startFrames();
   }
 
   function toggleMute() {
@@ -161,13 +191,40 @@ export default function VoiceConversation({ visible, onClose }: { visible: boole
         {/* Full-screen camera when enabled (point-and-talk) */}
         {cameraOn && (
           <>
-            <CameraView ref={cameraRef} style={StyleSheet.absoluteFill} facing="back" animateShutter={false} />
+            <CameraView
+              ref={cameraRef}
+              style={StyleSheet.absoluteFill}
+              facing="back"
+              animateShutter={false}
+              onCameraReady={() => { cameraReadyRef.current = true; startFrames(); }}
+            />
             <View style={styles.cameraScrim} />
             <View style={[styles.cameraBadge, { top: insets.top + 12 }]}>
               <View style={styles.liveDot} />
               <Text style={styles.cameraBadgeText}>Camera live — point & talk</Text>
             </View>
           </>
+        )}
+
+        {/* On-screen diagnostics — tap to hide. Tells us exactly where it stalls. */}
+        {showDebug && debug && (
+          <TouchableOpacity
+            activeOpacity={0.9}
+            onPress={() => setShowDebug(false)}
+            style={[styles.debugPanel, { top: insets.top + 8 }]}
+          >
+            <Text style={styles.debugTitle}>LIVE DIAGNOSTICS (tap to hide)</Text>
+            <Text style={styles.debugLine}>status: {debug.status}</Text>
+            <Text style={styles.debugLine}>socket open: {debug.socketOpen ? 'yes' : 'no'}</Text>
+            <Text style={styles.debugLine}>setup complete: {debug.setupDone ? 'yes' : 'no'}</Text>
+            <Text style={styles.debugLine}>mic active: {debug.micActive ? 'yes' : 'no'}</Text>
+            <Text style={[styles.debugLine, debug.setupDone && debug.micChunksSent === 0 && styles.debugBad]}>
+              mic chunks sent: {debug.micChunksSent}{debug.setupDone && debug.micChunksSent === 0 ? '  ← MIC NOT STREAMING' : ''}
+            </Text>
+            <Text style={styles.debugLine}>camera frames sent: {debug.framesSent}</Text>
+            <Text style={styles.debugLine}>audio parts received: {debug.audioPartsReceived}</Text>
+            {!!debug.lastError && <Text style={[styles.debugLine, styles.debugBad]}>error: {debug.lastError}</Text>}
+          </TouchableOpacity>
         )}
 
         <View style={[styles.content, { paddingTop: insets.top + 16 }]}>
@@ -228,7 +285,15 @@ export default function VoiceConversation({ visible, onClose }: { visible: boole
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: COLORS.background },
   content: { flex: 1, justifyContent: 'space-between' },
-  cameraScrim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.28)' },
+  debugPanel: {
+    position: 'absolute', left: 10, zIndex: 20,
+    backgroundColor: 'rgba(0,0,0,0.82)', borderRadius: 10,
+    paddingHorizontal: 12, paddingVertical: 8, maxWidth: 250,
+  },
+  debugTitle: { color: '#7CFC9A', fontSize: 10, fontWeight: '800', marginBottom: 4, letterSpacing: 0.5 },
+  debugLine: { color: '#e2e8f0', fontSize: 11, lineHeight: 16, fontFamily: 'monospace' },
+  debugBad: { color: '#ff8080', fontWeight: '700' },
+  cameraScrim: { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(0,0,0,0.28)' },
   cameraBadge: {
     position: 'absolute', alignSelf: 'center', zIndex: 6,
     flexDirection: 'row', alignItems: 'center', gap: 6,

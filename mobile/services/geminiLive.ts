@@ -28,6 +28,18 @@ export interface LiveCallbacks {
   onError?: (detail: string) => void; // human-readable failure reason
 }
 
+/** Live diagnostic counters surfaced on-screen so we can see what's happening. */
+export interface LiveDebug {
+  status: LiveStatus;
+  socketOpen: boolean;
+  setupDone: boolean;
+  micActive: boolean;
+  micChunksSent: number;
+  framesSent: number;
+  audioPartsReceived: number;
+  lastError: string;
+}
+
 export interface LiveSessionOptions {
   userId: string | null;
   role?: UserRole | null;
@@ -109,6 +121,11 @@ export class LiveSession {
   // hear its own voice (echo -> self-interruptions).
   private playingBack = false;
   private opts: LiveSessionOptions;
+  // Diagnostics surfaced on-screen.
+  private framesSent = 0;
+  private audioPartsReceived = 0;
+  private lastError = '';
+  private status: LiveStatus = 'connecting';
 
   constructor(userIdOrOpts: string | null | LiveSessionOptions, cb: LiveCallbacks) {
     if (userIdOrOpts && typeof userIdOrOpts === 'object') {
@@ -118,7 +135,28 @@ export class LiveSession {
       this.opts = { userId: userIdOrOpts };
       this.userId = userIdOrOpts;
     }
-    this.cb = cb;
+    // Wrap callbacks so we can mirror status/errors into diagnostics.
+    const userStatus = cb.onStatus;
+    const userError = cb.onError;
+    this.cb = {
+      ...cb,
+      onStatus: (s) => { this.status = s; userStatus?.(s); },
+      onError: (d) => { this.lastError = d; userError?.(d); },
+    };
+  }
+
+  /** Snapshot of live counters for the on-screen diagnostic readout. */
+  getDebug(): LiveDebug {
+    return {
+      status: this.status,
+      socketOpen: this.ws?.readyState === WebSocket.OPEN,
+      setupDone: this.setupDone,
+      micActive: this.micActive,
+      micChunksSent: this.chunksSent,
+      framesSent: this.framesSent,
+      audioPartsReceived: this.audioPartsReceived,
+      lastError: this.lastError,
+    };
   }
 
   get isConfigured() {
@@ -269,6 +307,7 @@ export class LiveSession {
       const inline = p.inlineData || p.inline_data;
       if (inline?.data && String(inline.mimeType || inline.mime_type).startsWith('audio/')) {
         this.pcmChunks.push(inline.data);
+        this.audioPartsReceived++;
         this.cb.onStatus?.('speaking');
       }
     }
@@ -317,6 +356,7 @@ export class LiveSession {
   /** Send a single camera frame (base64 JPEG) as realtime video input. */
   sendImageFrame(base64Jpeg: string) {
     if (!this.setupDone) return;
+    this.framesSent++;
     this.send({
       realtimeInput: { mediaChunks: [{ mimeType: 'image/jpeg', data: base64Jpeg }] },
     });

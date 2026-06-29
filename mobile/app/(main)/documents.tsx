@@ -1,10 +1,11 @@
-import React, { useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, Modal } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import Markdown from 'react-native-markdown-display';
 import { useRouter } from 'expo-router';
 import { COLORS } from '@/constants/theme';
-import { useDocumentsStore } from '@/stores/documents.store';
+import { useDocumentsStore, type SavedDocument } from '@/stores/documents.store';
 import { shareDocumentPdf, printDocument, copyDocument } from '@/services/documentActions';
 
 function timeAgo(ts: number): string {
@@ -18,9 +19,11 @@ function timeAgo(ts: number): string {
 export default function DocumentsScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { documents, loaded, load, removeDocument } = useDocumentsStore();
+  const { documents, load, removeDocument } = useDocumentsStore();
+  const [reading, setReading] = useState<SavedDocument | null>(null);
 
-  useEffect(() => { if (!loaded) load(); }, [loaded]);
+  // Always reload when the screen opens so a just-saved document appears.
+  useEffect(() => { load(); }, []);
 
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
@@ -48,16 +51,16 @@ export default function DocumentsScreen() {
         <ScrollView contentContainerStyle={styles.list} showsVerticalScrollIndicator={false}>
           {documents.map((doc) => (
             <View key={doc.id} style={styles.card}>
-              <View style={styles.cardTop}>
+              <TouchableOpacity style={styles.cardTop} activeOpacity={0.7} onPress={() => setReading(doc)}>
                 <View style={styles.docIcon}>
                   <MaterialCommunityIcons name="file-document-outline" size={20} color={COLORS.primary} />
                 </View>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.docTitle} numberOfLines={2}>{doc.title}</Text>
-                  <Text style={styles.docDate}>{timeAgo(doc.createdAt)}</Text>
+                  <Text style={styles.docDate}>{timeAgo(doc.createdAt)} · tap to read</Text>
                 </View>
-              </View>
-              <Text style={styles.docPreview} numberOfLines={2}>{doc.content.replace(/[#*_`>]/g, '')}</Text>
+              </TouchableOpacity>
+              <Text style={styles.docPreview} numberOfLines={2}>{doc.content.replace(/[#*_`>]/g, '') || '(empty)'}</Text>
               <View style={styles.cardActions}>
                 <TouchableOpacity style={styles.act} onPress={() => shareDocumentPdf(doc.title, doc.content)}>
                   <MaterialCommunityIcons name="share-variant" size={17} color={COLORS.primary} />
@@ -89,6 +92,40 @@ export default function DocumentsScreen() {
           ))}
         </ScrollView>
       )}
+
+      {/* Reader */}
+      <Modal visible={!!reading} animationType="slide" onRequestClose={() => setReading(null)}>
+        <View style={[styles.root, { paddingTop: insets.top }]}>
+          <View style={styles.header}>
+            <TouchableOpacity onPress={() => setReading(null)} style={styles.backBtn}>
+              <MaterialCommunityIcons name="close" size={24} color={COLORS.text} />
+            </TouchableOpacity>
+            <Text style={styles.title} numberOfLines={1}>{reading?.title ?? 'Document'}</Text>
+            <View style={{ width: 40 }} />
+          </View>
+          <ScrollView contentContainerStyle={{ padding: 20, paddingBottom: insets.bottom + 40 }}>
+            <Markdown style={{ body: { color: COLORS.text, fontSize: 15, lineHeight: 24 } }}>
+              {reading?.content ?? ''}
+            </Markdown>
+          </ScrollView>
+          {!!reading && (
+            <View style={[styles.readerActions, { paddingBottom: insets.bottom + 10 }]}>
+              <TouchableOpacity style={styles.act} onPress={() => shareDocumentPdf(reading.title, reading.content)}>
+                <MaterialCommunityIcons name="share-variant" size={18} color={COLORS.primary} />
+                <Text style={styles.actLabel}>Share</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.act} onPress={() => printDocument(reading.title, reading.content)}>
+                <MaterialCommunityIcons name="printer" size={18} color={COLORS.primary} />
+                <Text style={styles.actLabel}>Print</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.act} onPress={async () => { await copyDocument(reading.content); Alert.alert('Copied', 'Document copied.'); }}>
+                <MaterialCommunityIcons name="content-copy" size={18} color={COLORS.primary} />
+                <Text style={styles.actLabel}>Copy</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -130,4 +167,9 @@ const styles = StyleSheet.create({
   },
   act: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingVertical: 4, paddingHorizontal: 8 },
   actLabel: { fontSize: 13, fontWeight: '600', color: COLORS.primary },
+  readerActions: {
+    flexDirection: 'row', justifyContent: 'space-around', alignItems: 'center',
+    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: COLORS.border,
+    backgroundColor: COLORS.surface, paddingTop: 10,
+  },
 });
