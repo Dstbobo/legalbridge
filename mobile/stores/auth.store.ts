@@ -8,9 +8,17 @@ export interface User {
   id: string;
   email: string;
   role: UserRole;
+  /** Specific audience within the role, e.g. business_owner, real_estate_agent,
+   *  journalist, civil_servant — shapes AI tone and the For You feed. */
+  subRole?: string;
   fullName?: string;
   state?: string;       // Nigerian state (Lagos, Abuja, etc.)
+  phone?: string;
   barNumber?: string;   // for lawyers
+  /** Billing tier groundwork: 'free' today; 'premium' when subscriptions launch. */
+  plan?: 'free' | 'premium';
+  /** Preferred answer language: 'en' (default), 'pcm', 'yo', 'ha', 'ig'. */
+  language?: string;
 }
 
 interface AuthState {

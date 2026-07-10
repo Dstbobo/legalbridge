@@ -79,8 +79,8 @@ export default function VoiceConversation({ visible, onClose }: { visible: boole
         const photo: any = await cam.takePictureAsync({ base64: false, quality: 0.4, skipProcessing: true, shutterSound: false } as any);
         if (photo?.uri) {
           const scaled = await ImageManipulator.manipulateAsync(
-            photo.uri, [{ resize: { width: 480 } }],
-            { compress: 0.6, format: ImageManipulator.SaveFormat.JPEG, base64: true },
+            photo.uri, [{ resize: { width: 768 } }],
+            { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG, base64: true },
           );
           if (scaled.base64) session.sendImageFrame(scaled.base64);
         }
@@ -102,6 +102,7 @@ export default function VoiceConversation({ visible, onClose }: { visible: boole
       {
         userId: user?.id ?? null,
         role: user?.role ?? null,
+        subRole: user?.subRole ?? null,
         roleLabel: user?.role ? ROLE_LABELS[user.role] : null,
         history,
       },
@@ -206,25 +207,40 @@ export default function VoiceConversation({ visible, onClose }: { visible: boole
           </>
         )}
 
-        {/* On-screen diagnostics — tap to hide. Tells us exactly where it stalls. */}
-        {showDebug && debug && (
-          <TouchableOpacity
-            activeOpacity={0.9}
-            onPress={() => setShowDebug(false)}
-            style={[styles.debugPanel, { top: insets.top + 8 }]}
-          >
-            <Text style={styles.debugTitle}>LIVE DIAGNOSTICS (tap to hide)</Text>
-            <Text style={styles.debugLine}>status: {debug.status}</Text>
-            <Text style={styles.debugLine}>socket open: {debug.socketOpen ? 'yes' : 'no'}</Text>
-            <Text style={styles.debugLine}>setup complete: {debug.setupDone ? 'yes' : 'no'}</Text>
-            <Text style={styles.debugLine}>mic active: {debug.micActive ? 'yes' : 'no'}</Text>
-            <Text style={[styles.debugLine, debug.setupDone && debug.micChunksSent === 0 && styles.debugBad]}>
-              mic chunks sent: {debug.micChunksSent}{debug.setupDone && debug.micChunksSent === 0 ? '  ← MIC NOT STREAMING' : ''}
-            </Text>
-            <Text style={styles.debugLine}>camera frames sent: {debug.framesSent}</Text>
-            <Text style={styles.debugLine}>audio parts received: {debug.audioPartsReceived}</Text>
-            {!!debug.lastError && <Text style={[styles.debugLine, styles.debugBad]}>error: {debug.lastError}</Text>}
-          </TouchableOpacity>
+        {/* On-screen diagnostics — collapsible. Tells us exactly where it stalls. */}
+        {debug && (
+          showDebug ? (
+            <TouchableOpacity
+              activeOpacity={0.9}
+              onPress={() => setShowDebug(false)}
+              style={[styles.debugPanel, { top: insets.top + 8 }]}
+            >
+              <Text style={styles.debugTitle}>LIVE DIAGNOSTICS (tap to hide)</Text>
+              <Text style={styles.debugLine}>status: {debug.status}</Text>
+              <Text style={styles.debugLine}>socket open: {debug.socketOpen ? 'yes' : 'no'}</Text>
+              <Text style={styles.debugLine}>setup complete: {debug.setupDone ? 'yes' : 'no'}</Text>
+              <Text style={styles.debugLine}>turns completed: {debug.turnsCompleted}</Text>
+              <Text style={styles.debugLine}>mic active: {debug.micActive ? 'yes' : 'no'}  ·  gated: {debug.micGated ? 'yes' : 'no'}</Text>
+              <Text style={[styles.debugLine, debug.setupDone && debug.micChunksSent === 0 && styles.debugBad]}>
+                mic chunks sent: {debug.micChunksSent}{debug.setupDone && debug.micChunksSent === 0 ? '  ← MIC NOT STREAMING' : ''}
+              </Text>
+              <Text style={[styles.debugLine, debug.secsSinceMic > 4 && !debug.micGated && styles.debugBad]}>
+                last mic chunk: {debug.secsSinceMic < 0 ? '—' : debug.secsSinceMic + 's ago'}
+              </Text>
+              <Text style={styles.debugLine}>camera frames sent: {debug.framesSent}</Text>
+              <Text style={styles.debugLine}>audio parts received: {debug.audioPartsReceived}</Text>
+              <Text style={styles.debugLine}>last server msg: {debug.lastServerMsg || '—'} ({debug.secsSinceServer < 0 ? '—' : debug.secsSinceServer + 's ago'})</Text>
+              {!!debug.closeInfo && <Text style={[styles.debugLine, styles.debugBad]}>closed: {debug.closeInfo}</Text>}
+              {!!debug.lastError && <Text style={[styles.debugLine, styles.debugBad]}>error: {debug.lastError}</Text>}
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity
+              onPress={() => setShowDebug(true)}
+              style={[styles.debugChip, { top: insets.top + 8 }]}
+            >
+              <Text style={styles.debugChipText}>🔬 diag</Text>
+            </TouchableOpacity>
+          )
         )}
 
         <View style={[styles.content, { paddingTop: insets.top + 16 }]}>
@@ -293,6 +309,12 @@ const styles = StyleSheet.create({
   debugTitle: { color: '#7CFC9A', fontSize: 10, fontWeight: '800', marginBottom: 4, letterSpacing: 0.5 },
   debugLine: { color: '#e2e8f0', fontSize: 11, lineHeight: 16, fontFamily: 'monospace' },
   debugBad: { color: '#ff8080', fontWeight: '700' },
+  debugChip: {
+    position: 'absolute', left: 10, zIndex: 20,
+    backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: 12,
+    paddingHorizontal: 10, paddingVertical: 4,
+  },
+  debugChipText: { color: '#7CFC9A', fontSize: 11, fontWeight: '700' },
   cameraScrim: { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(0,0,0,0.28)' },
   cameraBadge: {
     position: 'absolute', alignSelf: 'center', zIndex: 6,

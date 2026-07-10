@@ -12,6 +12,10 @@ export const COLORS = {
   warning: '#f57c00',
   success: '#2ecc71',
   surface: '#ffffff',
+  // Translucent surface for floating panels (composer, bottom nav) so content
+  // faintly shows through — the see-through "glass" look. True frosted blur
+  // arrives with expo-blur in the next native build.
+  surfaceGlass: 'rgba(255,255,255,0.75)',
   surfaceDark: '#112247',
   background: '#f0f2f7',
   backgroundDark: '#04060a',

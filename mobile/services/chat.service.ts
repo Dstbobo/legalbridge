@@ -18,6 +18,7 @@ export async function streamChat(
   chatId: string,
   onChunk: (text: string) => void,
   signal?: AbortSignal,
+  opts?: { language?: string },
 ): Promise<void> {
   const token = await getAuthToken();
   const url = `${SUPABASE_URL}/functions/v1/chat-stream`;
@@ -31,7 +32,7 @@ export async function streamChat(
         Authorization: `Bearer ${token}`,
         apikey: SUPABASE_ANON_KEY,
       },
-      body: JSON.stringify({ message, chatId }),
+      body: JSON.stringify({ message, chatId, language: opts?.language ?? 'en' }),
       signal,
     });
   } catch (e: any) {
@@ -51,7 +52,7 @@ export async function streamDocument(
   chatId: string,
   onChunk: (text: string) => void,
   signal?: AbortSignal,
-  opts?: { userType?: string; history?: { role: 'user' | 'assistant'; content: string }[] },
+  opts?: { userType?: string; language?: string; history?: { role: 'user' | 'assistant'; content: string }[] },
 ): Promise<void> {
   const token = await getAuthToken();
   // Route through the same Supabase infra as chat (chat-documents Edge Function)
@@ -74,7 +75,7 @@ export async function streamDocument(
         Authorization: `Bearer ${token}`,
         apikey: SUPABASE_ANON_KEY,
       },
-      body: JSON.stringify({ messages, userType: opts?.userType ?? 'other', summary: '', profile: {} }),
+      body: JSON.stringify({ messages, userType: opts?.userType ?? 'other', summary: '', profile: {}, language: opts?.language ?? 'en' }),
       signal,
     });
   } catch (e: any) {
@@ -97,7 +98,7 @@ export async function streamVision(
   attachments: { images?: Attachment[]; documents?: Attachment[] },
   onChunk: (text: string) => void,
   signal?: AbortSignal,
-  opts?: { userType?: string },
+  opts?: { userType?: string; language?: string },
 ): Promise<void> {
   const token = await getAuthToken();
   const url = `${SUPABASE_URL}/functions/v1/chat-tools`;
@@ -117,6 +118,7 @@ export async function streamVision(
         images: attachments.images ?? [],
         documents: attachments.documents ?? [],
         userType: opts?.userType ?? 'other',
+        language: opts?.language ?? 'en',
       }),
       signal,
     });

@@ -1,1 +1,6 @@
-/* /index.html 200
+# Pretty URLs for the legal pages (Google Cloud + Play listing link to these)
+/privacy   /privacy.html   200
+/terms     /terms.html     200
+
+# Everything else falls back to the landing page
+/*         /index.html     200

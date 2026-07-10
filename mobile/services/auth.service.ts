@@ -98,3 +98,27 @@ export async function markOnboardedOnServer() {
   if (!data.session) return;
   await supabase.auth.updateUser({ data: { onboarded: true } });
 }
+
+/**
+ * Fires the one-time welcome email. Safe to call more than once — the
+ * send-welcome function no-ops if the user was already welcomed. Never throws
+ * into the UI: a failed email must not block the user from entering the app.
+ */
+export async function sendWelcomeEmail() {
+  try {
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (!token) return;
+    await fetch(`${SUPABASE_URL}/functions/v1/send-welcome`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        apikey: SUPABASE_ANON_KEY,
+        'Content-Type': 'application/json',
+      },
+      body: '{}',
+    });
+  } catch {
+    // Best-effort only.
+  }
+}

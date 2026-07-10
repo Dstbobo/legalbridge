@@ -2,13 +2,14 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View, FlatList, StyleSheet, Text, TextInput,
   TouchableOpacity, Platform, Alert, Modal, Pressable, ScrollView,
-  Keyboard, Share, Linking,
+  Keyboard, Share, Linking, Animated,
 } from 'react-native';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import Markdown from 'react-native-markdown-display';
+import { BlurView } from 'expo-blur';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useChatStore, type Message } from '@/stores/chat.store';
 import { useAuthStore } from '@/stores/auth.store';
@@ -33,6 +34,21 @@ async function loadRecentSessions(): Promise<RecentSession[]> {
   } catch { return []; }
 }
 
+async function saveSessionMessages(id: string, messages: Message[]) {
+  try {
+    await AsyncStorage.setItem(`lb_session_${id}`, JSON.stringify(messages));
+  } catch {}
+}
+
+async function loadSessionMessages(id: string): Promise<Message[] | null> {
+  try {
+    const raw = await AsyncStorage.getItem(`lb_session_${id}`);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return parsed.map((m: any) => ({ ...m, timestamp: new Date(m.timestamp), isStreaming: false }));
+  } catch { return null; }
+}
+
 async function saveRecentSession(session: RecentSession) {
   try {
     const existing = await loadRecentSessions();
@@ -53,6 +69,9 @@ import { isLawyer, isLawStudent, type UserRole } from '@/constants/roles';
 import DiscoveryScreen from './discovery';
 import ClientsScreen from './clients';
 import VoiceConversation from '@/components/VoiceConversation';
+import { listConversations, type Conversation } from '@/services/messaging.service';
+import { ActivityIndicator } from 'react-native';
+import { useDictation } from '@/hooks/useDictation';
 
 type ChatMode = 'assistant' | 'draft';
 
@@ -61,18 +80,18 @@ import { COLORS } from '@/constants/theme';
 
 // ── Markdown styles ───────────────────────────────────────────────────────
 const mdStyles = {
-  body: { color: COLORS.text, fontSize: 15, lineHeight: 24 },
-  paragraph: { marginTop: 0, marginBottom: 10 },
-  heading1: { fontSize: 21, fontWeight: '700' as const, color: COLORS.text, marginBottom: 8, marginTop: 14 },
-  heading2: { fontSize: 18, fontWeight: '700' as const, color: COLORS.text, marginBottom: 6, marginTop: 12 },
-  heading3: { fontSize: 16, fontWeight: '700' as const, color: COLORS.text, marginBottom: 4, marginTop: 10 },
+  body: { color: COLORS.text, fontSize: 16, lineHeight: 23, fontFamily: Platform.OS === 'android' ? 'serif' : 'Georgia' },
+  paragraph: { marginTop: 0, marginBottom: 8 },
+  heading1: { fontSize: 20, fontWeight: '700' as const, color: COLORS.text, marginBottom: 6, marginTop: 12 },
+  heading2: { fontSize: 17.5, fontWeight: '700' as const, color: COLORS.text, marginBottom: 5, marginTop: 10 },
+  heading3: { fontSize: 16, fontWeight: '700' as const, color: COLORS.text, marginBottom: 4, marginTop: 8 },
   strong: { fontWeight: '700' as const, color: COLORS.text },
   em: { fontStyle: 'italic' as const },
-  bullet_list: { marginBottom: 10 },
-  ordered_list: { marginBottom: 10 },
-  list_item: { marginBottom: 5 },
-  bullet_list_icon: { color: COLORS.primary, marginRight: 8, lineHeight: 24 },
-  ordered_list_icon: { color: COLORS.primary, marginRight: 8, lineHeight: 24, fontWeight: '700' as const },
+  bullet_list: { marginBottom: 8 },
+  ordered_list: { marginBottom: 8 },
+  list_item: { marginBottom: 3 },
+  bullet_list_icon: { color: COLORS.text, marginRight: 8, lineHeight: 23 },
+  ordered_list_icon: { color: COLORS.text, marginRight: 8, lineHeight: 23, fontWeight: '700' as const },
   code_inline: {
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
     fontSize: 13, backgroundColor: COLORS.secondary,
@@ -164,7 +183,7 @@ function getFollowUp(role: UserRole | null | undefined, hasHistory: boolean, var
   return opts[variant % opts.length];
 }
 
-function HomeScreen({ onSend, user, hasHistory }: { onSend: (t: string) => void; user: any; hasHistory: boolean }) {
+function HomeScreen({ onSend, user, hasHistory, topInset = 0, bottomInset = 0 }: { onSend: (t: string) => void; user: any; hasHistory: boolean; topInset?: number; bottomInset?: number }) {
   const firstName = user?.fullName?.split(' ')[0] ?? user?.email?.split('@')[0] ?? 'there';
   // Pick a stable variant for this screen open (not on every keystroke/re-render).
   const variant = React.useMemo(() => Math.floor(Math.random() * 3), []);
@@ -172,16 +191,89 @@ function HomeScreen({ onSend, user, hasHistory }: { onSend: (t: string) => void;
   const followUp = getFollowUp(user?.role, hasHistory, variant);
 
   return (
-    <View style={styles.homeMinimal}>
+    <View style={[styles.homeMinimal, { paddingTop: topInset + 96 }]}>
       <Image source={LB_LOGO} style={styles.lbLogoImg} resizeMode="contain" />
       <Text style={styles.homeGreeting}>{greetingLine}</Text>
       <Text style={styles.homeSubGreeting}>{followUp}</Text>
+      <Text style={styles.homeDisclaimer}>
+        Independent app — not affiliated with or representing any government entity.
+        Provides general legal information, not legal advice.
+      </Text>
+    </View>
+  );
+}
+
+// ── Smart "thinking" status ───────────────────────────────────────────────
+// Instead of a dumb spinner, we narrate what the AI is actually doing. The
+// phases match the request type (question / draft / file) and the user's role,
+// and once the normal phases play out (slow network) it rolls into reassuring
+// "still working" messages — so a long wait feels intelligent, not broken.
+type ThinkKind = 'chat' | 'draft' | 'vision';
+
+function thinkingPhases(kind: ThinkKind, group: 'lawyer' | 'student' | 'general'): string[] {
+  if (kind === 'draft') {
+    return [
+      'Understanding your request',
+      'Structuring the document',
+      group === 'lawyer' ? 'Applying the right clauses' : 'Drafting the clauses',
+      'Polishing the wording',
+    ];
+  }
+  if (kind === 'vision') {
+    return [
+      'Opening your file',
+      'Reading through the details',
+      'Analysing it under Nigerian law',
+      'Preparing your explanation',
+    ];
+  }
+  return [
+    'Reading your question',
+    group === 'lawyer'
+      ? 'Reviewing the legal position'
+      : group === 'student'
+        ? 'Checking the principles'
+        : 'Thinking it through',
+    'Checking Nigerian law',
+    'Composing your answer',
+  ];
+}
+
+// Shown after the normal phases if the response is still not back (slow network).
+const THINKING_SLOW = [
+  'Taking a little longer than usual',
+  'Still working — hang tight',
+  'Fetching you the best answer',
+  'Almost there',
+];
+
+function ThinkingStatus({ kind, userRole }: { kind?: ThinkKind; userRole?: UserRole | null }) {
+  const [ticks, setTicks] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setTicks((n) => n + 1), 550);
+    return () => clearInterval(t);
+  }, []);
+
+  const group = isLawyer(userRole) ? 'lawyer' : isLawStudent(userRole) ? 'student' : 'general';
+  const phases = React.useMemo(() => thinkingPhases(kind ?? 'chat', group), [kind, group]);
+  const step = Math.floor(ticks / 4); // ~2.2s per phase
+  const label = step < phases.length ? phases[step] : THINKING_SLOW[(step - phases.length) % THINKING_SLOW.length];
+  const activeDot = ticks % 3;
+
+  return (
+    <View style={styles.thinkingRow}>
+      <Text style={styles.thinkingText}>{label}</Text>
+      <View style={styles.thinkingDots}>
+        {[0, 1, 2].map((i) => (
+          <View key={i} style={[styles.dot, { opacity: activeDot === i ? 1 : 0.3 }]} />
+        ))}
+      </View>
     </View>
   );
 }
 
 // ── Message bubble ────────────────────────────────────────────────────────
-function MessageBubble({ message }: { message: Message }) {
+function MessageBubble({ message, userRole }: { message: Message; userRole?: UserRole | null }) {
   if (message.role === 'user') {
     return (
       <View style={styles.userRow}>
@@ -194,11 +286,7 @@ function MessageBubble({ message }: { message: Message }) {
   return (
     <View style={styles.aiRow}>
       {message.isStreaming && !message.content ? (
-        <View style={styles.typingDots}>
-          <View style={[styles.dot, { opacity: 0.3 }]} />
-          <View style={[styles.dot, { opacity: 0.6 }]} />
-          <View style={styles.dot} />
-        </View>
+        <ThinkingStatus kind={message.kind} userRole={userRole} />
       ) : (
         <Markdown style={mdStyles}>
           {message.content + (message.isStreaming ? '▋' : '')}
@@ -252,9 +340,10 @@ function DocumentActions({ content }: { content: string }) {
 }
 
 // ── Side drawer ───────────────────────────────────────────────────────────
-function SideDrawer({ visible, onClose, onNavigate, recentSessions }: {
+function SideDrawer({ visible, onClose, onNavigate, recentSessions, onOpenSession }: {
   visible: boolean; onClose: () => void; onNavigate: (r: string) => void;
   recentSessions: RecentSession[];
+  onOpenSession: (s: RecentSession) => void;
 }) {
   const { clearChat } = useChatStore();
   const menuItems = [
@@ -303,7 +392,7 @@ function SideDrawer({ visible, onClose, onNavigate, recentSessions }: {
             {recentSessions.length === 0 ? (
               <Text style={styles.recentEmpty}>Your recent chats will appear here.</Text>
             ) : recentSessions.map((s) => (
-              <TouchableOpacity key={s.id} style={styles.recentItem} onPress={onClose} activeOpacity={0.7}>
+              <TouchableOpacity key={s.id} style={styles.recentItem} onPress={() => onOpenSession(s)} activeOpacity={0.7}>
                 <MaterialCommunityIcons name="message-text-outline" size={16} color={COLORS.textSecondary} />
                 <Text style={styles.recentText} numberOfLines={1}>{s.title}</Text>
               </TouchableOpacity>
@@ -405,7 +494,7 @@ function MoreMenu({ visible, onClose, onAction, topOffset }: {
 
 // ── Input bar ─────────────────────────────────────────────────────────────
 function InputBar({
-  inputText, setInputText, inputState, onSend, onStop, onPlus, onLive, inputRef, hasAttachments,
+  inputText, setInputText, inputState, onSend, onStop, onPlus, onLive, inputRef, hasAttachments, modeLabel, onModePress, language,
 }: {
   inputText: string;
   setInputText: (t: string) => void;
@@ -414,51 +503,74 @@ function InputBar({
   onStop: () => void;
   onPlus: () => void;
   onLive: () => void;
-  inputRef?: React.RefObject<TextInput>;
+  inputRef?: React.RefObject<TextInput | null>;
   hasAttachments?: boolean;
+  modeLabel?: string;
+  onModePress?: () => void;
+  language?: string;
 }) {
   const canSend = inputState === 'typing' || (inputState === 'idle' && !!hasAttachments);
+  const { listening, toggle: toggleDictation } = useDictation(setInputText, language);
   return (
-    <View style={styles.inputBar}>
-      <View style={styles.inputPill}>
-        {/* + attach */}
-        <TouchableOpacity style={styles.pillSideBtn} onPress={onPlus} disabled={inputState === 'generating'}>
-          <MaterialCommunityIcons name="plus" size={22} color={COLORS.textSecondary} />
+    <View style={styles.composerCard}>
+      {/* Row 1: the text field */}
+      <TextInput
+        ref={inputRef}
+        style={styles.composerInput}
+        value={inputText}
+        onChangeText={setInputText}
+        placeholder={hasAttachments ? 'Add a message or send…' : 'Reply to LegalBridge…'}
+        placeholderTextColor={COLORS.textSecondary}
+        multiline
+        maxLength={2000}
+        editable={inputState !== 'generating'}
+      />
+
+      {/* Row 2: controls — + | mode pill | … | mic | wave/send */}
+      <View style={styles.composerRow}>
+        <TouchableOpacity style={styles.composerCircle} onPress={onPlus} disabled={inputState === 'generating'}>
+          <MaterialCommunityIcons name="plus" size={22} color={COLORS.text} />
         </TouchableOpacity>
 
-        {/* Text field */}
-        <TextInput
-          ref={inputRef}
-          style={styles.pillInput}
-          value={inputText}
-          onChangeText={setInputText}
-          placeholder={hasAttachments ? 'Add a message or send…' : 'Reply to LegalBridge…'}
-          placeholderTextColor={COLORS.textSecondary}
-          multiline
-          maxLength={2000}
-          editable={inputState !== 'generating'}
-        />
+        {!!onModePress && (
+          <TouchableOpacity style={styles.composerModePill} onPress={onModePress} activeOpacity={0.8}>
+            <MaterialCommunityIcons
+              name={modeLabel === 'Draft' ? 'file-document-edit-outline' : 'message-text-outline'}
+              size={15}
+              color={COLORS.text}
+            />
+            <Text style={styles.composerModeText}>{modeLabel}</Text>
+            <MaterialCommunityIcons name="chevron-down" size={15} color={COLORS.textSecondary} />
+          </TouchableOpacity>
+        )}
 
-        {/* Right action: stop | send | mic */}
+        <View style={{ flex: 1 }} />
+
+        <TouchableOpacity
+          style={[styles.composerCircle, listening && styles.composerCircleRec]}
+          onPress={() => toggleDictation(inputText)}
+        >
+          <MaterialCommunityIcons
+            name={listening ? 'microphone' : 'microphone-outline'}
+            size={21}
+            color={listening ? '#fff' : COLORS.text}
+          />
+        </TouchableOpacity>
+
         {inputState === 'generating' ? (
-          <TouchableOpacity style={styles.pillActionBtn} onPress={onStop}>
+          <TouchableOpacity style={styles.composerDark} onPress={onStop}>
             <View style={styles.stopIcon} />
           </TouchableOpacity>
         ) : canSend ? (
-          <TouchableOpacity style={styles.pillActionBtn} onPress={onSend}>
-            <MaterialCommunityIcons name="arrow-up" size={18} color="#fff" />
+          <TouchableOpacity style={styles.composerDark} onPress={onSend}>
+            <MaterialCommunityIcons name="arrow-up" size={21} color="#fff" />
           </TouchableOpacity>
         ) : (
-          <TouchableOpacity style={styles.pillSideBtn} onPress={() => Alert.alert('Voice Input', 'Coming in next update.')}>
-            <MaterialCommunityIcons name="microphone-outline" size={22} color={COLORS.textSecondary} />
+          <TouchableOpacity style={styles.composerDark} onPress={onLive} activeOpacity={0.8}>
+            <MaterialCommunityIcons name="waveform" size={21} color="#fff" />
           </TouchableOpacity>
         )}
       </View>
-
-      {/* Waveform / live mode trigger */}
-      <TouchableOpacity style={styles.waveBtn} onPress={onLive} activeOpacity={0.8}>
-        <MaterialCommunityIcons name="waveform" size={20} color={COLORS.primary} />
-      </TouchableOpacity>
     </View>
   );
 }
@@ -491,19 +603,20 @@ function BottomNav({ tab, onTab, role, bottomInset = 0 }: { tab: TabId; onTab: (
 
 // ── Mentorship tab (law students) ─────────────────────────────────────────
 function MentorshipTab() {
+  const router = useRouter();
   return (
     <ScrollView contentContainerStyle={styles.tabContent}>
       <Text style={styles.tabHeading}>Mentorship</Text>
       <Text style={styles.tabSub}>Connect with senior lawyers, find pupillage opportunities, and grow your legal career.</Text>
       <View style={styles.tabCards}>
         {[
-          { icon: 'school-outline', title: 'Find a Mentor', desc: 'Connect with senior legal practitioners in your area of interest' },
+          { icon: 'school-outline', title: 'Find a Mentor', desc: 'Connect with verified senior legal practitioners in your area of interest', route: '/(main)/mentors' },
           { icon: 'briefcase-check-outline', title: 'Pupillage Board', desc: 'Browse chambers and law firms accepting pupils right now' },
           { icon: 'calendar-check-outline', title: 'Career Events', desc: 'Seminars, moots, bar dinners, and networking events' },
           { icon: 'book-open-outline', title: 'Study Groups', desc: 'Join active law student study and moot prep groups' },
         ].map((c) => (
           <TouchableOpacity key={c.title} style={styles.featureCard} activeOpacity={0.8}
-            onPress={() => Alert.alert('Coming Soon', 'This feature is being built.')}>
+            onPress={() => (c as any).route ? router.push((c as any).route) : Alert.alert('Coming Soon', 'This feature is being built.')}>
             <MaterialCommunityIcons name={c.icon as any} size={26} color={COLORS.primary} />
             <Text style={styles.featureCardTitle}>{c.title}</Text>
             <Text style={styles.featureCardDesc}>{c.desc}</Text>
@@ -544,12 +657,65 @@ function LawyersTab() {
 
 // ── Messages tab ──────────────────────────────────────────────────────────
 function MessagesTab() {
+  const router = useRouter();
+  const [convos, setConvos] = useState<Conversation[]>([]);
+  const [myId, setMyId] = useState('');
+  const [loadingConvos, setLoadingConvos] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = () =>
+      listConversations()
+        .then(({ mine, myId: id }) => { if (!cancelled) { setConvos(mine); setMyId(id); } })
+        .catch(() => {});
+    load().finally?.(() => {});
+    Promise.resolve(load()).finally(() => { if (!cancelled) setLoadingConvos(false); });
+    const t = setInterval(load, 10000);
+    return () => { cancelled = true; clearInterval(t); };
+  }, []);
+
+  if (loadingConvos) {
+    return <View style={styles.emptyTab}><ActivityIndicator size="large" color={COLORS.primary} /></View>;
+  }
+  if (!convos.length) {
+    return (
+      <View style={styles.emptyTab}>
+        <MaterialCommunityIcons name="message-text-outline" size={52} color={COLORS.border} />
+        <Text style={styles.emptyTitle}>No messages yet</Text>
+        <Text style={styles.emptySub}>When you book or message a lawyer, the conversation appears here — everything stays inside LegalBridge.</Text>
+      </View>
+    );
+  }
   return (
-    <View style={styles.emptyTab}>
-      <MaterialCommunityIcons name="message-text-outline" size={52} color={COLORS.border} />
-      <Text style={styles.emptyTitle}>No messages yet</Text>
-      <Text style={styles.emptySub}>Direct messages with lawyers and your LegalBridge team will appear here.</Text>
-    </View>
+    <ScrollView contentContainerStyle={{ padding: 16, gap: 10 }}>
+      {convos.map((c) => {
+        const other = c.client_id === myId ? c.lawyer_name : c.client_name;
+        const initials = other.split(' ').filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join('');
+        const when = new Date(c.last_at);
+        const timeLabel = Date.now() - when.getTime() < 86400000
+          ? when.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          : when.toLocaleDateString();
+        return (
+          <TouchableOpacity
+            key={c.id}
+            style={styles.convoRow}
+            activeOpacity={0.8}
+            onPress={() => router.push({ pathname: '/(main)/conversation', params: { id: c.id, name: other } } as any)}
+          >
+            <View style={styles.convoAvatar}><Text style={styles.convoAvatarText}>{initials || '?'}</Text></View>
+            <View style={{ flex: 1 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <Text style={styles.convoName} numberOfLines={1}>{other}</Text>
+                <Text style={styles.convoTime}>{timeLabel}</Text>
+              </View>
+              <Text style={styles.convoPreview} numberOfLines={1}>
+                {c.last_sender === myId ? 'You: ' : ''}{c.last_message ?? 'Start the conversation'}
+              </Text>
+            </View>
+          </TouchableOpacity>
+        );
+      })}
+    </ScrollView>
   );
 }
 
@@ -619,7 +785,7 @@ export default function ChatScreen() {
   const {
     messages, isLoading,
     addUserMessage, startStreaming, appendStream, finaliseStream,
-    setLoading, clearChat,
+    setLoading, clearChat, setMessages,
   } = useChatStore();
   const { user } = useAuthStore();
 
@@ -634,6 +800,33 @@ export default function ChatScreen() {
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const [staged, setStaged] = useState<StagedAttachment[]>([]);
   const [recentSessions, setRecentSessions] = useState<RecentSession[]>([]);
+  const params = useLocalSearchParams<{ intent?: string; t?: string }>();
+
+  // "Start free consultation" (LegalBridge Counsel) lands here with intent=counsel.
+  useEffect(() => {
+    if (params.intent === 'counsel') setTab('chat');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params.t]);
+
+  // Persist the conversation on device after each completed turn, so RECENT can reopen it.
+  useEffect(() => {
+    if (!isLoading && messages.length > 0) {
+      saveSessionMessages(chatIdRef.current, messages);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLoading, messages.length]);
+
+  async function openRecentSession(sess: RecentSession) {
+    const msgs = await loadSessionMessages(sess.id);
+    if (msgs && msgs.length) {
+      chatIdRef.current = sess.id;
+      setMessages(msgs);
+      setTab('chat');
+    } else {
+      Alert.alert('Chat unavailable', 'This conversation is no longer stored on this device.');
+    }
+    setDrawerOpen(false);
+  }
   const inputRef = useRef<TextInput>(null);
   const chatIdRef = useRef(`chat_${Date.now()}`);
   const abortRef = useRef<AbortController | null>(null);
@@ -692,17 +885,17 @@ export default function ChatScreen() {
       const userLabel = content ? `${content}\n\n${attachLabel}` : attachLabel;
       addUserMessage(userLabel);
       const aiMsgId = Math.random().toString(36).slice(2);
-      startStreaming(aiMsgId, false);
+      startStreaming(aiMsgId, false, 'vision');
       scrollToBottom();
 
       const abort = new AbortController();
       abortRef.current = abort;
-      const userType = isLawyer(user?.role) ? 'lawyer' : isLawStudent(user?.role) ? 'student' : 'other';
+      const userType = isLawyer(user?.role) ? 'lawyer' : isLawStudent(user?.role) ? 'student' : (user?.subRole ?? 'other');
       const question = content || 'Analyse this under Nigerian law. Identify the document type, read all the text, and explain it clearly.';
       const images = attachmentsToSend.filter((a) => a.mimeType.startsWith('image/')).map((a) => ({ data: a.base64, mimeType: a.mimeType }));
       const documents = attachmentsToSend.filter((a) => !a.mimeType.startsWith('image/')).map((a) => ({ data: a.base64, mimeType: a.mimeType }));
       try {
-        await streamVision(question, { images, documents }, (chunk) => { appendStream(chunk); scrollToBottom(); }, abort.signal, { userType });
+        await streamVision(question, { images, documents }, (chunk) => { appendStream(chunk); scrollToBottom(); }, abort.signal, { userType, language: user?.language ?? 'en' });
       } catch (e: any) {
         const isAbort = e?.name === 'AbortError' || /abort|cancel/i.test(e?.message ?? '');
         if (!isAbort) appendStream('\n\n_Could not analyse that file. Please try a clearer photo or a smaller PDF._');
@@ -719,7 +912,7 @@ export default function ChatScreen() {
     addUserMessage(content);
     const isDraft = mode === 'draft';
     const aiMsgId = Math.random().toString(36).slice(2);
-    startStreaming(aiMsgId, isDraft);
+    startStreaming(aiMsgId, isDraft, isDraft ? 'draft' : 'chat');
     scrollToBottom();
 
     const abort = new AbortController();
@@ -727,10 +920,10 @@ export default function ChatScreen() {
     try {
       const onChunk = (chunk: string) => { appendStream(chunk); scrollToBottom(); };
       if (isDraft) {
-        const userType = isLawyer(user?.role) ? 'lawyer' : isLawStudent(user?.role) ? 'student' : 'other';
-        await streamDocument(content, chatIdRef.current, onChunk, abort.signal, { userType });
+        const userType = isLawyer(user?.role) ? 'lawyer' : isLawStudent(user?.role) ? 'student' : (user?.subRole ?? 'other');
+        await streamDocument(content, chatIdRef.current, onChunk, abort.signal, { userType, language: user?.language ?? 'en' });
       } else {
-        await streamChat(content, chatIdRef.current, onChunk, abort.signal);
+        await streamChat(content, chatIdRef.current, onChunk, abort.signal, { language: user?.language ?? 'en' });
       }
     } catch (e: any) {
       const isAbort =
@@ -845,38 +1038,17 @@ export default function ChatScreen() {
 
   return (
     <KeyboardAvoidingView
-      style={[styles.root, { paddingTop: insets.top }]}
+      style={styles.root}
       behavior="padding"
       keyboardVerticalOffset={0}
     >
-      {/* Header — no title when in chat tab */}
-      <View style={styles.header}>
+      {/* Header — floats over edge-to-edge content, positioned by the safe area.
+          Hidden entirely on Discovery (it has its own). */}
+      {tab === 'chat' ? (
+      <View style={[styles.header, { top: insets.top + 12 }]}>
         <TouchableOpacity style={styles.headerBtn} onPress={() => setDrawerOpen(true)}>
           <MaterialCommunityIcons name="menu" size={24} color={COLORS.text} />
         </TouchableOpacity>
-        {tab !== 'chat' && (
-          <Text style={styles.headerWordmark}>
-            <Text style={{ color: COLORS.text }}>Legal</Text>
-            <Text style={{ color: COLORS.accent, fontStyle: 'italic' }}>Bridge</Text>
-          </Text>
-        )}
-        {tab === 'chat' && (
-          <View style={styles.headerCenter}>
-            <TouchableOpacity
-              style={styles.modePill}
-              onPress={() => setModeMenuOpen(true)}
-              activeOpacity={0.8}
-            >
-              <MaterialCommunityIcons
-                name={mode === 'draft' ? 'file-document-edit-outline' : 'message-text-outline'}
-                size={16}
-                color={COLORS.primary}
-              />
-              <Text style={styles.modePillText}>{mode === 'draft' ? 'Draft' : 'Assistant'}</Text>
-              <MaterialCommunityIcons name="chevron-down" size={16} color={COLORS.textSecondary} />
-            </TouchableOpacity>
-          </View>
-        )}
         <View style={styles.headerActions}>
           <TouchableOpacity style={styles.headerActionBtn} onPress={startNewCase}>
             <MaterialCommunityIcons name="square-edit-outline" size={22} color={COLORS.text} />
@@ -887,18 +1059,37 @@ export default function ChatScreen() {
           </TouchableOpacity>
         </View>
       </View>
+      ) : tab !== 'discovery' ? (
+      // Clean page header for Lawyers / Mentorship / Messages / Clients:
+      // just a back arrow + page title — no menu, no new-chat, no dots.
+      <View style={[styles.header, { top: insets.top + 12 }]}>
+        <TouchableOpacity style={styles.headerBtn} onPress={() => setTab('chat')}>
+          <MaterialCommunityIcons name="arrow-left" size={24} color={COLORS.text} />
+        </TouchableOpacity>
+        <Text style={styles.pageTitle}>
+          {tab === 'lawyers' ? 'Lawyers' : tab === 'mentorship' ? 'Mentorship' : tab === 'messages' ? 'Messages' : 'Clients'}
+        </Text>
+        <View style={{ width: 44 }} />
+      </View>
+      ) : null}
 
-      {/* Content — takes all remaining space */}
-      <View style={styles.content}>
+      {/* Content — fills edge-to-edge; scrollable content is padded so it starts
+          below the floating header buttons and scrolls up behind them. Non-chat
+          tabs (which aren't glass-behind) get a plain top inset instead. */}
+      <View style={[
+        styles.content,
+        tab === 'chat' && styles.contentFloat,
+        tab !== 'chat' && tab !== 'discovery' && { paddingTop: insets.top + 60 },
+      ]}>
         {tab === 'chat' && (
           messages.length === 0
-            ? <HomeScreen onSend={(t) => { setTab('chat'); sendMessage(t); }} user={user} hasHistory={recentSessions.length > 0} />
+            ? <HomeScreen onSend={(t) => { setTab('chat'); sendMessage(t); }} user={user} hasHistory={recentSessions.length > 0} topInset={insets.top} bottomInset={insets.bottom} />
             : <FlatList
                 ref={listRef}
                 data={messages}
                 keyExtractor={(m) => m.id}
-                renderItem={({ item }) => <MessageBubble message={item} />}
-                contentContainerStyle={styles.messageList}
+                renderItem={({ item }) => <MessageBubble message={item} userRole={user?.role} />}
+                contentContainerStyle={[styles.messageList, { paddingTop: insets.top + 72, paddingBottom: insets.bottom + 180 }]}
                 showsVerticalScrollIndicator={false}
                 onContentSizeChange={scrollToBottom}
               />
@@ -906,7 +1097,9 @@ export default function ChatScreen() {
         {tab === 'lawyers' && <LawyersTab />}
         {tab === 'mentorship' && <MentorshipTab />}
         {tab === 'messages' && <MessagesTab />}
-        {tab === 'discovery' && <DiscoveryScreen embedded />}
+        {tab === 'discovery' && (
+          <DiscoveryScreen embedded onBack={() => setTab(getDefaultTab(user?.role))} />
+        )}
         {tab === 'clients' && <ClientsScreen embedded />}
       </View>
 
@@ -945,15 +1138,18 @@ export default function ChatScreen() {
           onLive={() => setLiveMode(true)}
           inputRef={inputRef}
           hasAttachments={hasAttachments}
+          modeLabel={mode === 'draft' ? 'Draft' : 'Assistant'}
+          onModePress={() => setModeMenuOpen(true)}
+          language={user?.language ?? 'en'}
         />
       )}
 
       {/* Bottom nav — hides when keyboard is open. Inset lives inside the nav so its surface reaches the screen edge. */}
-      {!keyboardVisible && (
+      {!keyboardVisible && tab !== 'discovery' && (
         <BottomNav tab={tab} onTab={setTab} role={user?.role} bottomInset={insets.bottom} />
       )}
 
-      <SideDrawer visible={drawerOpen} onClose={() => setDrawerOpen(false)} onNavigate={navigate} recentSessions={recentSessions} />
+      <SideDrawer visible={drawerOpen} onClose={() => setDrawerOpen(false)} onNavigate={navigate} recentSessions={recentSessions} onOpenSession={openRecentSession} />
       <PlusSheet
         visible={plusOpen}
         onClose={() => setPlusOpen(false)}
@@ -970,31 +1166,38 @@ export default function ChatScreen() {
       <VoiceConversation visible={liveMode} onClose={() => setLiveMode(false)} />
 
       {/* Mode switcher dropdown — Assistant vs Draft Document */}
-      <Modal visible={modeMenuOpen} transparent animationType="fade" onRequestClose={() => setModeMenuOpen(false)}>
+      <Modal visible={modeMenuOpen} transparent animationType="slide" onRequestClose={() => setModeMenuOpen(false)}>
         <Pressable style={styles.modeOverlay} onPress={() => setModeMenuOpen(false)}>
-          <View style={[styles.modeMenu, { top: insets.top + 56 }]}>
+          <Pressable style={[styles.modeSheet, { paddingBottom: insets.bottom + 16 }]} onPress={() => {}}>
+            <View style={styles.modeSheetHandle} />
+            <View style={styles.modeSheetHeader}>
+              <TouchableOpacity onPress={() => setModeMenuOpen(false)} hitSlop={10} style={styles.modeSheetClose}>
+                <MaterialCommunityIcons name="close" size={22} color={COLORS.text} />
+              </TouchableOpacity>
+              <Text style={styles.modeSheetTitle}>Select mode</Text>
+              <View style={{ width: 32 }} />
+            </View>
             {([
-              { id: 'assistant' as ChatMode, icon: 'message-text-outline', title: 'Assistant', desc: 'Ask questions, get legal guidance' },
-              { id: 'draft' as ChatMode, icon: 'file-document-edit-outline', title: 'Draft Document', desc: 'Generate contracts, letters, affidavits' },
+              { id: 'assistant' as ChatMode, title: 'Assistant', desc: 'Ask questions, get legal guidance' },
+              { id: 'draft' as ChatMode, title: 'Draft Document', desc: 'Generate contracts, letters, affidavits' },
             ]).map((m) => {
               const active = mode === m.id;
               return (
                 <TouchableOpacity
                   key={m.id}
-                  style={[styles.modeItem, active && styles.modeItemActive]}
+                  style={styles.modeSheetItem}
                   onPress={() => { setMode(m.id); setModeMenuOpen(false); }}
-                  activeOpacity={0.8}
+                  activeOpacity={0.7}
                 >
-                  <MaterialCommunityIcons name={m.icon as any} size={22} color={active ? COLORS.primary : COLORS.textSecondary} />
                   <View style={{ flex: 1 }}>
-                    <Text style={[styles.modeItemTitle, active && { color: COLORS.primary }]}>{m.title}</Text>
-                    <Text style={styles.modeItemDesc}>{m.desc}</Text>
+                    <Text style={styles.modeSheetItemTitle}>{m.title}</Text>
+                    <Text style={styles.modeSheetItemDesc}>{m.desc}</Text>
                   </View>
-                  {active && <MaterialCommunityIcons name="check" size={18} color={COLORS.primary} />}
+                  {active && <MaterialCommunityIcons name="check" size={20} color={COLORS.text} />}
                 </TouchableOpacity>
               );
             })}
-          </View>
+          </Pressable>
         </Pressable>
       </Modal>
     </KeyboardAvoidingView>
@@ -1003,13 +1206,18 @@ export default function ChatScreen() {
 
 // ── Styles ────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: COLORS.background },
+  root: { flex: 1, backgroundColor: COLORS.background, justifyContent: 'flex-end' },
   content: { flex: 1 },
+  // On the chat tab the content fills the whole screen so messages scroll behind
+  // the floating composer + nav; the transparent gaps around/between the two
+  // solid pills let the conversation show through.
+  contentFloat: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
 
   header: {
+    position: 'absolute', left: 0, right: 0, zIndex: 20,
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 16, paddingVertical: 10,
-    backgroundColor: COLORS.background,
+    paddingHorizontal: 22,
+    backgroundColor: 'transparent',
   },
   headerBtn: {
     width: 44, height: 44, borderRadius: 22,
@@ -1031,6 +1239,7 @@ const styles = StyleSheet.create({
   },
   headerActionBtn: { width: 40, height: 44, alignItems: 'center', justifyContent: 'center' },
   headerActionDivider: { width: StyleSheet.hairlineWidth, height: 22, backgroundColor: COLORS.border },
+  pageTitle: { flex: 1, textAlign: 'center', fontSize: 18, fontWeight: '800', color: COLORS.text },
   // Mode switcher (Assistant / Draft)
   headerCenter: { flex: 1, alignItems: 'center' },
   modePill: {
@@ -1040,7 +1249,7 @@ const styles = StyleSheet.create({
     paddingVertical: 6, paddingHorizontal: 12,
   },
   modePillText: { fontSize: 14, fontWeight: '700', color: COLORS.text },
-  modeOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.12)' },
+  modeOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'flex-end' },
   modeMenu: {
     position: 'absolute', alignSelf: 'center', width: 300,
     backgroundColor: COLORS.surface, borderRadius: 16,
@@ -1055,6 +1264,26 @@ const styles = StyleSheet.create({
   modeItemActive: { backgroundColor: `${COLORS.primary}10` },
   modeItemTitle: { fontSize: 15, fontWeight: '700', color: COLORS.text },
   modeItemDesc: { fontSize: 12, color: COLORS.textSecondary, marginTop: 1 },
+  modeSheet: {
+    backgroundColor: COLORS.surface,
+    borderTopLeftRadius: 24, borderTopRightRadius: 24,
+    paddingHorizontal: 20, paddingTop: 8,
+  },
+  modeSheetHandle: {
+    width: 40, height: 4, borderRadius: 2, backgroundColor: COLORS.border,
+    alignSelf: 'center', marginBottom: 12,
+  },
+  modeSheetHeader: {
+    flexDirection: 'row', alignItems: 'center', marginBottom: 14,
+  },
+  modeSheetClose: { width: 32, alignItems: 'flex-start' },
+  modeSheetTitle: { flex: 1, textAlign: 'center', fontSize: 17, fontWeight: '700', color: COLORS.text },
+  modeSheetItem: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    paddingVertical: 14,
+  },
+  modeSheetItemTitle: { fontSize: 17, fontWeight: '700', color: COLORS.text },
+  modeSheetItemDesc: { fontSize: 13.5, color: COLORS.textSecondary, marginTop: 3 },
   // Document action bar
   docActions: {
     flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10,
@@ -1086,22 +1315,29 @@ const styles = StyleSheet.create({
   headerWordmark: { fontSize: 20, fontWeight: '700' },
 
   // Home — clean minimal
-  homeMinimal: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32 },
+  homeMinimal: { flex: 1, alignItems: 'center', justifyContent: 'flex-start', paddingHorizontal: 32 },
   lbLogoImg: { width: 110, height: 110 },
   homeGreeting: { fontSize: 19, fontWeight: '700', color: COLORS.text, lineHeight: 26, marginTop: 20, textAlign: 'center' },
   homeSubGreeting: { fontSize: 15, fontWeight: '500', color: COLORS.textSecondary, lineHeight: 22, marginTop: 6, textAlign: 'center' },
+  homeDisclaimer: {
+    position: 'absolute', bottom: 14, left: 24, right: 24,
+    fontSize: 10.5, lineHeight: 15, color: COLORS.textSecondary, opacity: 0.55, textAlign: 'center',
+  },
 
   // Messages
   messageList: { paddingVertical: 16 },
-  userRow: { flexDirection: 'row', justifyContent: 'flex-end', paddingHorizontal: 16, marginBottom: 16 },
+  userRow: { flexDirection: 'row', justifyContent: 'flex-end', paddingHorizontal: 16, marginBottom: 10 },
   userBubble: {
-    backgroundColor: COLORS.primary, borderRadius: 20, borderBottomRightRadius: 4,
-    paddingHorizontal: 16, paddingVertical: 10, maxWidth: '82%',
+    backgroundColor: COLORS.primary, borderRadius: 18, borderBottomRightRadius: 5,
+    paddingHorizontal: 14, paddingVertical: 8, maxWidth: '82%',
   },
-  userText: { color: '#fff', fontSize: 15, lineHeight: 22 },
-  aiRow: { paddingHorizontal: 16, marginBottom: 20 },
+  userText: { color: '#fff', fontSize: 15, lineHeight: 21 },
+  aiRow: { paddingHorizontal: 18, marginBottom: 12 },
   typingDots: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 10 },
   dot: { width: 7, height: 7, borderRadius: 4, backgroundColor: COLORS.textSecondary },
+  thinkingRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 10 },
+  thinkingText: { fontSize: 14.5, fontWeight: '500', color: COLORS.textSecondary, fontStyle: 'italic' },
+  thinkingDots: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   docTag: {
     flexDirection: 'row', alignItems: 'center', gap: 5,
     marginTop: 10, paddingTop: 10,
@@ -1131,6 +1367,54 @@ const styles = StyleSheet.create({
     width: 36, height: 36, borderRadius: 18,
     alignItems: 'center', justifyContent: 'center',
   },
+  pillSideBtnActive: { backgroundColor: COLORS.error },
+  // ── Claude-style two-row composer ──
+  composerCard: {
+    marginHorizontal: 10, marginBottom: 10,
+    // Solid white floating pill — matches the nav. The gap below it (marginBottom)
+    // stays transparent so content scrolls through the space between the two pills.
+    backgroundColor: COLORS.surface, borderRadius: 26,
+    borderWidth: 1, borderColor: COLORS.border,
+    paddingHorizontal: 12, paddingTop: 6, paddingBottom: 10,
+    shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 }, elevation: 5,
+  },
+  composerInput: {
+    fontSize: 16.5, color: COLORS.text, lineHeight: 22,
+    paddingHorizontal: 8, paddingTop: 10, paddingBottom: 6,
+    maxHeight: 130,
+  },
+  composerRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  composerCircle: {
+    width: 40, height: 40, borderRadius: 20,
+    backgroundColor: COLORS.background,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  composerCircleRec: { backgroundColor: COLORS.error },
+  composerModePill: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    backgroundColor: COLORS.background, borderRadius: 20,
+    paddingHorizontal: 13, paddingVertical: 10,
+  },
+  composerModeText: { fontSize: 13.5, fontWeight: '600', color: COLORS.text },
+  composerDark: {
+    width: 42, height: 42, borderRadius: 21,
+    backgroundColor: '#16181d',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  convoRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    backgroundColor: COLORS.surface, borderRadius: 14,
+    borderWidth: 1, borderColor: COLORS.border, padding: 13,
+  },
+  convoAvatar: {
+    width: 46, height: 46, borderRadius: 23, backgroundColor: COLORS.primary,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  convoAvatarText: { color: '#fff', fontSize: 15, fontWeight: '800' },
+  convoName: { flex: 1, fontSize: 14.5, fontWeight: '700', color: COLORS.text },
+  convoTime: { fontSize: 11, color: COLORS.textSecondary },
+  convoPreview: { fontSize: 13, color: COLORS.textSecondary, marginTop: 2 },
   pillInput: {
     flex: 1, minHeight: 36, maxHeight: 130,
     fontSize: 15, color: COLORS.text,
@@ -1183,6 +1467,8 @@ const styles = StyleSheet.create({
   },
   bottomNav: {
     flexDirection: 'row',
+    // Clean SOLID pill — obviously a different, separate piece from the
+    // see-through frosted composer above it.
     backgroundColor: COLORS.surface,
     borderRadius: 30,
     paddingVertical: 8, paddingHorizontal: 6,

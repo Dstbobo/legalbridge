@@ -38,11 +38,19 @@ export interface LiveDebug {
   framesSent: number;
   audioPartsReceived: number;
   lastError: string;
+  turnsCompleted: number;
+  micGated: boolean;
+  secsSinceServer: number; // -1 if no server frame yet
+  secsSinceMic: number;    // -1 if no mic chunk yet
+  lastServerMsg: string;
+  closeInfo: string;
 }
 
 export interface LiveSessionOptions {
   userId: string | null;
   role?: UserRole | null;
+  /** Specific audience (business_owner, journalist, civil_servant, …). */
+  subRole?: string | null;
   roleLabel?: string | null;
   /** Recent chat turns so voice continues the same conversation. */
   history?: { role: 'user' | 'assistant'; content: string }[];
@@ -65,7 +73,15 @@ function buildLiveSystemInstruction(opts: LiveSessionOptions): string {
       'Use a clear, encouraging teaching tone. Explain legal concepts from first principles, ' +
       'give Nigerian examples, and check understanding.';
   } else {
-    audience = 'a member of the public seeking legal guidance in Nigeria';
+    const subMap: Record<string, string> = {
+      individual: 'an individual with personal legal questions',
+      business_owner: 'a Nigerian business owner dealing with contracts, CAC, tax and compliance',
+      real_estate: 'a Nigerian real estate agent dealing with property law, tenancy and land documentation',
+      journalist: 'a Nigerian journalist concerned with press freedom, FOI and defamation',
+      civil_servant: 'a Nigerian civil servant navigating public service rules and workplace rights',
+      student: 'a young Nigerian student',
+    };
+    audience = subMap[opts.subRole ?? ''] ?? 'a member of the public seeking legal guidance in Nigeria';
     tone =
       'Be clear, plain-spoken and practical. Avoid heavy jargon; explain legal terms simply ' +
       'and always note when a qualified lawyer should be consulted.';
@@ -81,6 +97,9 @@ function buildLiveSystemInstruction(opts: LiveSessionOptions): string {
 
   return (
     `You are LegalBridge AI, a voice assistant for ${audience}. ${tone} ` +
+    'The user speaks and understands ENGLISH (Nigerian English). Always interpret ' +
+    'their speech as English and ALWAYS reply in clear English — never in Arabic, ' +
+    'Hausa, or any other language, even if a word sounds ambiguous. ' +
     'Keep spoken answers short and natural — a few sentences unless asked for depth. ' +
     'If you see an image (a document, contract, form or notice), read and explain it for them. ' +
     'Never mention Google, Gemini, Claude, Anthropic or any underlying AI technology.' +
@@ -120,12 +139,28 @@ export class LiveSession {
   // Half-duplex: suppress the mic while AI audio is playing so Gemini doesn't
   // hear its own voice (echo -> self-interruptions).
   private playingBack = false;
+  // Belt-and-suspenders: expo-audio's didJustFinish callback is unreliable on
+  // SDK 56, so a duration-based timer always re-opens the mic after playback.
+  private playbackTimer: ReturnType<typeof setTimeout> | null = null;
   private opts: LiveSessionOptions;
   // Diagnostics surfaced on-screen.
   private framesSent = 0;
   private audioPartsReceived = 0;
   private lastError = '';
   private status: LiveStatus = 'connecting';
+  private turnsCompleted = 0;
+  private lastServerAt = 0;       // ms timestamp of last frame from Gemini
+  private lastMicChunkAt = 0;     // ms timestamp of last mic chunk we sent
+  private lastServerMsg = '';     // type of the last server message
+  private closeInfo = '';         // socket close code/reason when it ends
+  private watchdog: ReturnType<typeof setInterval> | null = null;
+  // Auto-reconnect + Gemini session resumption: the Supabase proxy is recycled
+  // after ~1-2 min (wall-clock limit), dropping the socket with code 1006. We
+  // transparently reconnect and resume the same Gemini session so the
+  // conversation continues without the user noticing.
+  private resumeHandle: string | null = null;
+  private reconnectAttempts = 0;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(userIdOrOpts: string | null | LiveSessionOptions, cb: LiveCallbacks) {
     if (userIdOrOpts && typeof userIdOrOpts === 'object') {
@@ -147,6 +182,7 @@ export class LiveSession {
 
   /** Snapshot of live counters for the on-screen diagnostic readout. */
   getDebug(): LiveDebug {
+    const now = Date.now();
     return {
       status: this.status,
       socketOpen: this.ws?.readyState === WebSocket.OPEN,
@@ -156,6 +192,12 @@ export class LiveSession {
       framesSent: this.framesSent,
       audioPartsReceived: this.audioPartsReceived,
       lastError: this.lastError,
+      turnsCompleted: this.turnsCompleted,
+      micGated: this.playingBack || this.micMuted,
+      secsSinceServer: this.lastServerAt ? Math.round((now - this.lastServerAt) / 1000) : -1,
+      secsSinceMic: this.lastMicChunkAt ? Math.round((now - this.lastMicChunkAt) / 1000) : -1,
+      lastServerMsg: this.lastServerMsg,
+      closeInfo: this.closeInfo,
     };
   }
 
@@ -207,10 +249,16 @@ export class LiveSession {
     this.send({
       setup: {
         model: LIVE_MODEL,
-        generationConfig: { responseModalities: ['AUDIO'] },
+        generationConfig: {
+          responseModalities: ['AUDIO'],
+          speechConfig: { languageCode: 'en-US' },
+        },
         systemInstruction: { parts: [{ text: buildLiveSystemInstruction(this.opts) }] },
         inputAudioTranscription: {},
         outputAudioTranscription: {},
+        // Ask Gemini for resumption handles, and resume the prior session when
+        // we're reconnecting after a dropped proxy connection.
+        sessionResumption: this.resumeHandle ? { handle: this.resumeHandle } : {},
       },
     });
     this.clearSetupTimer();
@@ -242,13 +290,36 @@ export class LiveSession {
     ws.onmessage = (ev) => this.onMessage(ev.data);
     ws.onerror = (e: any) => log('proxy WS error:', e?.message ?? 'unknown');
     ws.onclose = (e: any) => {
-      log('proxy WS closed', e?.code ?? '', e?.reason ?? '');
+      const code = e?.code ?? '?';
+      const reason = e?.reason ?? '';
+      log('proxy WS closed', code, reason);
+      this.closeInfo = `code ${code}${reason ? ': ' + reason : ''}`;
       this.clearSetupTimer();
       if (this.closed) return;
-      if (!this.setupDone) {
-        this.cb.onError?.(`Could not reach the voice service (code ${e?.code ?? '?'}${e?.reason ? ': ' + e.reason : ''}).`);
+
+      // The proxy gets recycled (~1-2 min) and drops the socket — usually 1006.
+      // As long as we'd reached setup at least once and still have attempts left,
+      // reconnect transparently and resume the Gemini session.
+      const everConnected = this.setupDone || !!this.resumeHandle;
+      if (everConnected && this.reconnectAttempts < 6) {
+        this.reconnectAttempts += 1;
+        this.setupDone = false; // gate mic sends until the new session is ready
+        this.cb.onStatus?.('reconnecting');
+        const delay = Math.min(2000, 300 * this.reconnectAttempts);
+        log(`reconnecting (attempt ${this.reconnectAttempts}) in ${delay}ms, resume=${!!this.resumeHandle}`);
+        if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = setTimeout(() => { if (!this.closed) this.openSocket(); }, delay);
+        return;
       }
-      this.cb.onStatus?.(this.setupDone ? 'closed' : 'error');
+
+      // First-connection failure, or we've exhausted reconnects — surface it.
+      this.stopWatchdog();
+      this.cb.onError?.(
+        everConnected
+          ? `Voice session kept dropping (${this.closeInfo}). Tap the pill to try again.`
+          : `Could not reach the voice service (${this.closeInfo}).`,
+      );
+      this.cb.onStatus?.('error');
     };
   }
 
@@ -270,6 +341,8 @@ export class LiveSession {
     let msg: any;
     try { msg = JSON.parse(text); } catch { return; }
 
+    this.lastServerAt = Date.now();
+
     if (msg.type === 'proxy_status') {
       log('proxy_status:', msg.status);
       if (msg.status === 'connected') this.cb.onStatus?.('connected');
@@ -280,16 +353,33 @@ export class LiveSession {
     }
 
     if (msg.setupComplete) {
-      log('setupComplete — starting mic');
+      const resumed = this.reconnectAttempts > 0;
+      log(resumed ? 'setupComplete — session resumed' : 'setupComplete — starting mic');
+      this.lastServerMsg = 'setupComplete';
       this.clearSetupTimer();
       this.setupDone = true;
+      this.reconnectAttempts = 0; // healthy again
       this.cb.onStatus?.('listening');
       this.startMic();
+      this.startWatchdog();
+      return;
+    }
+
+    // Gemini hands out resumption tokens; keep the latest so a reconnect can
+    // resume this exact session instead of starting cold.
+    const sru = msg.sessionResumptionUpdate;
+    if (sru) {
+      this.lastServerMsg = 'sessionResumptionUpdate';
+      if (sru.resumable && sru.newHandle) this.resumeHandle = sru.newHandle;
       return;
     }
 
     const sc = msg.serverContent;
-    if (!sc) return;
+    if (!sc) {
+      if (msg.goAway) { this.lastServerMsg = 'goAway'; log('goAway received', JSON.stringify(msg.goAway)); }
+      return;
+    }
+    this.lastServerMsg = 'serverContent';
 
     if (sc.interrupted) {
       this.pcmChunks = [];
@@ -313,12 +403,16 @@ export class LiveSession {
     }
 
     if (sc.turnComplete || sc.generationComplete) {
+      this.turnsCompleted++;
+      this.lastServerMsg = 'turnComplete';
       await this.flushPlayback();
       this.cb.onStatus?.('listening');
     }
   }
 
   // ── Microphone streaming ──
+  private micListenerBound = false;
+
   private startMic() {
     if (this.micActive) return;
     if (!LiveAudioStream || typeof LiveAudioStream.init !== 'function') {
@@ -329,22 +423,69 @@ export class LiveSession {
     }
     try {
       LiveAudioStream.init(MIC_OPTIONS as any);
-      LiveAudioStream.on('data', (chunk: string) => {
-        if (!this.setupDone || this.micMuted || this.playingBack) return;
-        this.chunksSent++;
-        this.send({
-          realtimeInput: { mediaChunks: [{ mimeType: 'audio/pcm;rate=16000', data: chunk }] },
+      // Bind the data handler ONCE — re-binding on every resume would stack
+      // duplicate listeners and send each chunk multiple times.
+      if (!this.micListenerBound) {
+        LiveAudioStream.on('data', (chunk: string) => {
+          // We always receive data while recording; only forward when the
+          // session is ready, the user isn't muted, and the AI isn't speaking.
+          this.lastMicChunkAt = Date.now();
+          if (!this.setupDone || this.micMuted || this.playingBack) return;
+          this.chunksSent++;
+          this.send({
+            realtimeInput: { mediaChunks: [{ mimeType: 'audio/pcm;rate=16000', data: chunk }] },
+          });
+          this.cb.onLevel?.(Math.min(1, chunk.length / 6000));
         });
-        this.cb.onLevel?.(Math.min(1, chunk.length / 6000));
-      });
+        this.micListenerBound = true;
+      }
       LiveAudioStream.start();
       this.micActive = true;
+      this.lastMicChunkAt = Date.now();
       log('mic started');
       this.cb.onStatus?.('listening');
     } catch (e) {
       log('startMic failed:', (e as Error)?.message);
       this.cb.onStatus?.('error');
     }
+  }
+
+  /**
+   * Bounce the native recorder. expo-audio playback can steal the Android audio
+   * session and silently stop LiveAudioStream from emitting data; restarting it
+   * (and re-asserting recording mode) revives the mic so the next user turn is
+   * actually heard.
+   */
+  private resumeMic() {
+    try { LiveAudioStream.stop(); } catch {}
+    setAudioModeAsync({
+      allowsRecording: true,
+      playsInSilentMode: true,
+      shouldPlayInBackground: false,
+      shouldRouteThroughEarpiece: false,
+    }).catch(() => {});
+    try { LiveAudioStream.start(); } catch (e) { log('resumeMic failed:', (e as Error)?.message); }
+    this.micActive = true;
+    this.lastMicChunkAt = Date.now();
+  }
+
+  // Watchdog: every 2s, if we should be hearing the user but no mic data has
+  // arrived for >3s, the recorder has stalled — revive it.
+  private startWatchdog() {
+    this.stopWatchdog();
+    this.watchdog = setInterval(() => {
+      if (this.closed || !this.setupDone) return;
+      if (this.micMuted || this.playingBack) return;
+      const since = Date.now() - (this.lastMicChunkAt || 0);
+      if (this.lastMicChunkAt && since > 3000) {
+        log('watchdog: no mic data for', since, 'ms — reviving recorder');
+        this.resumeMic();
+      }
+    }, 2000);
+  }
+
+  private stopWatchdog() {
+    if (this.watchdog) { clearInterval(this.watchdog); this.watchdog = null; }
   }
 
   private stopMic() {
@@ -356,6 +497,9 @@ export class LiveSession {
   /** Send a single camera frame (base64 JPEG) as realtime video input. */
   sendImageFrame(base64Jpeg: string) {
     if (!this.setupDone) return;
+    // Don't feed frames while the AI is speaking — mid-turn realtime input can
+    // trigger a self-interruption and derail the conversation.
+    if (this.playingBack) return;
     this.framesSent++;
     this.send({
       realtimeInput: { mediaChunks: [{ mimeType: 'image/jpeg', data: base64Jpeg }] },
@@ -390,12 +534,23 @@ export class LiveSession {
       this.playingBack = true;
       const player = createAudioPlayer({ uri: path });
       this.player = player;
+      const finish = () => {
+        this.stopPlayback();
+        // Revive the recorder immediately — playback may have stolen the audio
+        // session — so the next user turn is heard without waiting on the watchdog.
+        this.resumeMic();
+        this.cb.onStatus?.('listening');
+      };
       player.addListener('playbackStatusUpdate', (st: any) => {
-        if (st?.didJustFinish) {
-          this.stopPlayback();
-          this.cb.onStatus?.('listening');
-        }
+        if (st?.didJustFinish) finish();
       });
+      // Fallback: estimate the clip length from the PCM size and force the mic
+      // back on even if didJustFinish never fires (the common SDK 56 case that
+      // left the session stuck on "listening" after a couple of turns).
+      const approxBytes = Math.floor((pcmB64.length * 3) / 4);
+      const durationMs = Math.ceil(approxBytes / 48); // 24kHz * 16-bit mono => 48 bytes/ms
+      this.clearPlaybackTimer();
+      this.playbackTimer = setTimeout(finish, durationMs + 800);
       player.play();
     } catch (e) {
       log('playback failed:', (e as Error)?.message);
@@ -403,7 +558,12 @@ export class LiveSession {
     }
   }
 
+  private clearPlaybackTimer() {
+    if (this.playbackTimer) { clearTimeout(this.playbackTimer); this.playbackTimer = null; }
+  }
+
   private async stopPlayback() {
+    this.clearPlaybackTimer();
     const p = this.player;
     this.player = null;
     this.playingBack = false;
@@ -415,6 +575,8 @@ export class LiveSession {
   async close() {
     this.closed = true;
     this.clearSetupTimer();
+    if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
+    this.stopWatchdog();
     this.stopMic();
     await this.stopPlayback();
     try { this.ws?.close(); } catch {}

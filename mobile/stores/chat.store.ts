@@ -7,6 +7,7 @@ export interface Message {
   timestamp: Date;
   isStreaming?: boolean;
   isDocument?: boolean;  // true when this message is a generated legal document
+  kind?: 'chat' | 'draft' | 'vision';  // what the AI is doing — drives the thinking status
 }
 
 interface ChatState {
@@ -16,12 +17,13 @@ interface ChatState {
   streamingContent: string;
   mode: 'chat' | 'document';  // chat = general AI, document = document drafting
   addUserMessage: (content: string) => string;
-  startStreaming: (id: string, isDocument?: boolean) => void;
+  startStreaming: (id: string, isDocument?: boolean, kind?: Message['kind']) => void;
   appendStream: (chunk: string) => void;
   finaliseStream: (id: string) => void;
   setSession: (sessionId: string) => void;
   setLoading: (loading: boolean) => void;
   setMode: (mode: 'chat' | 'document') => void;
+  setMessages: (messages: Message[]) => void;
   clearChat: () => void;
 }
 
@@ -42,11 +44,11 @@ export const useChatStore = create<ChatState>((set) => ({
     return id;
   },
 
-  startStreaming: (id, isDocument = false) => {
+  startStreaming: (id, isDocument = false, kind = isDocument ? 'draft' : 'chat') => {
     set((s) => ({
       streamingContent: '',
       messages: [...s.messages, {
-        id, role: 'assistant', content: '', timestamp: new Date(), isStreaming: true, isDocument,
+        id, role: 'assistant', content: '', timestamp: new Date(), isStreaming: true, isDocument, kind,
       }],
     }));
   },
@@ -73,5 +75,6 @@ export const useChatStore = create<ChatState>((set) => ({
   setSession: (sessionId) => set({ sessionId }),
   setLoading: (isLoading) => set({ isLoading }),
   setMode: (mode) => set({ mode }),
+  setMessages: (messages) => set({ messages, streamingContent: '', isLoading: false }),
   clearChat: () => set({ messages: [], sessionId: null, streamingContent: '', isLoading: false }),
 }));

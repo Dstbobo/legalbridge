@@ -107,7 +107,7 @@ export default function SettingsScreen() {
           </View>
           <TouchableOpacity
             style={styles.editBadge}
-            onPress={() => soon('Edit profile')}
+            onPress={() => router.push('/(main)/profile' as any)}
             activeOpacity={0.8}
           >
             <MaterialCommunityIcons name="pencil-outline" size={16} color={COLORS.primary} />
@@ -120,9 +120,25 @@ export default function SettingsScreen() {
           <SettingsRow
             icon="account-edit-outline"
             label="Edit Profile"
-            sublabel="Name, phone number, state"
-            onPress={() => soon('Edit profile')}
+            sublabel="Name, phone number, state, identity"
+            onPress={() => router.push('/(main)/profile' as any)}
           />
+          {isLawyer(user?.role) && (
+            <SettingsRow
+              icon="shield-check-outline"
+              label="Lawyer Verification"
+              sublabel="Verify your SCN to appear in the directory"
+              onPress={() => router.push('/(main)/verify-lawyer' as any)}
+            />
+          )}
+          {isLawyer(user?.role) && (
+            <SettingsRow
+              icon="account-tie-outline"
+              label="Mentor Hub"
+              sublabel="Offer mentorship to law students"
+              onPress={() => router.push('/(main)/mentor-hub' as any)}
+            />
+          )}
           <SettingsRow
             icon="lock-outline"
             label="Change Password"

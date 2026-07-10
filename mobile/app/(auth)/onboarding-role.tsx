@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Image } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Image, ScrollView } from 'react-native';
 
 const LB_LOGO = require('@/assets/logo.png');
 import { Button } from 'react-native-paper';
@@ -7,12 +7,23 @@ import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useAuthStore } from '@/stores/auth.store';
+import { supabase, sendWelcomeEmail } from '@/services/auth.service';
 import { api } from '@/services/api';
 import { type UserRole } from '@/constants/roles';
 import { COLORS } from '@/constants/theme';
 
-type Step = 'category' | 'legal_sub';
+type Step = 'category' | 'legal_sub' | 'general_sub';
 type Category = 'legal' | 'general';
+
+/** Specific audiences on the general side — each gets its own AI tone. */
+const GENERAL_SUBROLES: { id: string; label: string; desc: string; icon: string }[] = [
+  { id: 'individual', label: 'Individual', desc: 'Personal legal questions — rights, family, tenancy, disputes.', icon: 'account-outline' },
+  { id: 'business_owner', label: 'Business Owner', desc: 'Contracts, CAC registration, tax, compliance and employees.', icon: 'store-outline' },
+  { id: 'real_estate', label: 'Real Estate Agent', desc: 'Property law, tenancy agreements, deeds, land documentation.', icon: 'home-city-outline' },
+  { id: 'journalist', label: 'Journalist', desc: 'Press freedom, FOI requests, defamation, verifying legal claims.', icon: 'newspaper-variant-outline' },
+  { id: 'civil_servant', label: 'Civil Servant', desc: 'Public service rules, pensions, workplace rights and procedure.', icon: 'office-building-outline' },
+  { id: 'student', label: 'Student (non-law)', desc: 'School matters, internships, rights as a young Nigerian.', icon: 'school-outline' },
+];
 
 export default function OnboardingRoleScreen() {
   const insets = useSafeAreaInsets();
@@ -21,36 +32,48 @@ export default function OnboardingRoleScreen() {
   const [step, setStep] = useState<Step>('category');
   const [category, setCategory] = useState<Category | null>(null);
   const [role, setRole] = useState<UserRole | null>(null);
+  const [subRole, setSubRole] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  async function save(r: UserRole) {
+  async function save(r: UserRole, sub?: string | null) {
     setSaving(true);
-    try { await api.patch('/api/v1/profile', { role: r }); } catch {}
-    await updateProfile({ role: r });
+    try { await api.patch('/api/v1/profile', { role: r, subRole: sub ?? undefined }); } catch {}
+    await updateProfile({ role: r, subRole: sub ?? undefined });
     await completeOnboarding();
+    // Fire-and-forget: the welcome email must never delay entering the app.
+    sendWelcomeEmail();
     setSaving(false);
     router.replace('/(main)/chat');
   }
 
   function pickCategory(cat: Category) {
     setCategory(cat);
-    if (cat === 'general') {
-      setRole('general_user');
-    } else {
-      setRole(null);
-      setStep('legal_sub');
-    }
+    setRole(null);
+    setSubRole(null);
+  }
+
+  // Leaving onboarding means signing out — there's no other account state to
+  // return to, so this lets the user try a different email/Google account.
+  async function backToLogin() {
+    try { await supabase.auth.signOut(); } catch {}
+    await useAuthStore.getState().clearAuth();
+    router.replace('/(auth)/landing');
   }
 
   // ── Step 1: Category ──────────────────────────────────────────────────
   if (step === 'category') {
     return (
-      <View style={[styles.root, { paddingTop: insets.top + 32, paddingBottom: insets.bottom + 16 }]}>
-        <View style={styles.header}>
+      <View style={[styles.root, { paddingTop: insets.top + 16, paddingBottom: insets.bottom + 16 }]}>
+        <TouchableOpacity style={styles.backBtn} onPress={backToLogin}>
+          <MaterialCommunityIcons name="arrow-left" size={22} color={COLORS.text} />
+          <Text style={styles.backText}>Back to sign in</Text>
+        </TouchableOpacity>
+
+        <View style={[styles.header, { marginTop: 12 }]}>
           <Image source={LB_LOGO} style={styles.lbLogoImg} resizeMode="contain" />
           <Text style={styles.title}>Who are you?</Text>
           <Text style={styles.subtitle}>
-            Choose the category that best describes you. This shapes your experience on LegalBridge.
+            Choose the category that best describes you. LegalBridge is built differently for each.
           </Text>
         </View>
 
@@ -89,12 +112,12 @@ export default function OnboardingRoleScreen() {
             </View>
             <View style={styles.cardBody}>
               <View style={styles.cardTop}>
-                <Text style={[styles.roleLabel, category === 'general' && { color: '#2e7d32' }]}>General User</Text>
+                <Text style={[styles.roleLabel, category === 'general' && { color: '#2e7d32' }]}>Everyday User</Text>
                 {category === 'general' && <MaterialCommunityIcons name="check-circle" size={20} color="#2e7d32" />}
               </View>
-              <Text style={styles.roleDesc}>Individuals, businesses, journalists, and others seeking legal guidance.</Text>
+              <Text style={styles.roleDesc}>Individuals, business owners, agents, journalists and civil servants seeking legal guidance.</Text>
               <View style={styles.tags}>
-                {['Individuals', 'Businesses', 'Journalists', 'Others'].map((t) => (
+                {['Individuals', 'Businesses', 'Agents', 'Journalists', 'Civil Servants'].map((t) => (
                   <View key={t} style={[styles.tag, category === 'general' && styles.tagActiveGreen]}>
                     <Text style={[styles.tagText, category === 'general' && { color: '#2e7d32' }]}>{t}</Text>
                   </View>
@@ -107,100 +130,134 @@ export default function OnboardingRoleScreen() {
         <View style={styles.footer}>
           <Button
             mode="contained"
-            onPress={category === 'general' ? () => save('general_user') : () => setStep('legal_sub')}
+            onPress={() => setStep(category === 'legal' ? 'legal_sub' : 'general_sub')}
             disabled={!category || saving}
             loading={saving}
             style={styles.continueBtn}
             contentStyle={{ paddingVertical: 6 }}
           >
-            {category === 'legal' ? 'Continue' : 'Get Started'}
+            Continue
           </Button>
-          <TouchableOpacity onPress={() => save('general_user')} disabled={saving} style={styles.skipBtn}>
-            <Text style={styles.skipText}>Skip for now</Text>
-          </TouchableOpacity>
         </View>
       </View>
     );
   }
 
-  // ── Step 2: Legal sub-role ────────────────────────────────────────────
+  // ── Step 2a: Legal sub-role ───────────────────────────────────────────
+  if (step === 'legal_sub') {
+    return (
+      <View style={[styles.root, { paddingTop: insets.top + 32, paddingBottom: insets.bottom + 16 }]}>
+        <TouchableOpacity style={styles.backBtn} onPress={() => { setStep('category'); setCategory(null); setRole(null); }}>
+          <MaterialCommunityIcons name="arrow-left" size={22} color={COLORS.text} />
+          <Text style={styles.backText}>Back</Text>
+        </TouchableOpacity>
+
+        <View style={styles.header}>
+          <Image source={LB_LOGO} style={styles.lbLogoImgSmall} resizeMode="contain" />
+          <Text style={styles.title}>Lawyer or law student?</Text>
+          <Text style={styles.subtitle}>Each has its own tools, navigation and AI behaviour.</Text>
+        </View>
+
+        <View style={styles.cards}>
+          <TouchableOpacity
+            style={[styles.card, role === 'lawyer' && styles.cardActive]}
+            onPress={() => setRole('lawyer')}
+            activeOpacity={0.8}
+          >
+            <View style={[styles.iconWrap, role === 'lawyer' && styles.iconWrapActive]}>
+              <MaterialCommunityIcons name="briefcase-outline" size={28} color={role === 'lawyer' ? '#fff' : COLORS.primary} />
+            </View>
+            <View style={styles.cardBody}>
+              <View style={styles.cardTop}>
+                <Text style={[styles.roleLabel, role === 'lawyer' && { color: COLORS.primary }]}>I am a Lawyer</Text>
+                {role === 'lawyer' && <MaterialCommunityIcons name="check-circle" size={20} color={COLORS.primary} />}
+              </View>
+              <Text style={styles.roleDesc}>Practising barrister or solicitor — manage clients, draft documents, research cases, and stay compliant.</Text>
+            </View>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.card, role === 'law_student' && styles.cardActive]}
+            onPress={() => setRole('law_student')}
+            activeOpacity={0.8}
+          >
+            <View style={[styles.iconWrap, role === 'law_student' && styles.iconWrapActive]}>
+              <MaterialCommunityIcons name="school-outline" size={28} color={role === 'law_student' ? '#fff' : COLORS.primary} />
+            </View>
+            <View style={styles.cardBody}>
+              <View style={styles.cardTop}>
+                <Text style={[styles.roleLabel, role === 'law_student' && { color: COLORS.primary }]}>I am a Law Student</Text>
+                {role === 'law_student' && <MaterialCommunityIcons name="check-circle" size={20} color={COLORS.primary} />}
+              </View>
+              <Text style={styles.roleDesc}>Studying law at a Nigerian university or law school — moot prep, case summaries, mentorship, and pupillage search.</Text>
+            </View>
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.footer}>
+          <Button
+            mode="contained"
+            onPress={() => role && save(role, role)}
+            disabled={!role || saving}
+            loading={saving}
+            style={styles.continueBtn}
+            contentStyle={{ paddingVertical: 6 }}
+          >
+            Get Started
+          </Button>
+        </View>
+      </View>
+    );
+  }
+
+  // ── Step 2b: General sub-role (who exactly?) ──────────────────────────
   return (
     <View style={[styles.root, { paddingTop: insets.top + 32, paddingBottom: insets.bottom + 16 }]}>
-      <TouchableOpacity style={styles.backBtn} onPress={() => { setStep('category'); setCategory(null); setRole(null); }}>
+      <TouchableOpacity style={styles.backBtn} onPress={() => { setStep('category'); setCategory(null); setSubRole(null); }}>
         <MaterialCommunityIcons name="arrow-left" size={22} color={COLORS.text} />
         <Text style={styles.backText}>Back</Text>
       </TouchableOpacity>
 
       <View style={styles.header}>
-        <View style={styles.lbMark}><Text style={styles.lbText}>LB</Text></View>
-        <Text style={styles.title}>Lawyer or law student?</Text>
-        <Text style={styles.subtitle}>Your navigation and tools will be tailored to your role.</Text>
+        <Image source={LB_LOGO} style={styles.lbLogoImgSmall} resizeMode="contain" />
+        <Text style={styles.title}>Tell us more about you</Text>
+        <Text style={styles.subtitle}>Your answers, documents and news feed will be tailored to your world.</Text>
       </View>
 
-      <View style={styles.cards}>
-        <TouchableOpacity
-          style={[styles.card, role === 'lawyer' && styles.cardActive]}
-          onPress={() => setRole('lawyer')}
-          activeOpacity={0.8}
-        >
-          <View style={[styles.iconWrap, role === 'lawyer' && styles.iconWrapActive]}>
-            <MaterialCommunityIcons name="briefcase-outline" size={28} color={role === 'lawyer' ? '#fff' : COLORS.primary} />
-          </View>
-          <View style={styles.cardBody}>
-            <View style={styles.cardTop}>
-              <Text style={[styles.roleLabel, role === 'lawyer' && { color: COLORS.primary }]}>I am a Lawyer</Text>
-              {role === 'lawyer' && <MaterialCommunityIcons name="check-circle" size={20} color={COLORS.primary} />}
-            </View>
-            <Text style={styles.roleDesc}>Practising barrister or solicitor — manage clients, draft documents, research cases, and stay compliant.</Text>
-            <View style={styles.tags}>
-              {['NBA Member', 'Barrister', 'Solicitor', 'Legal Practitioner'].map((t) => (
-                <View key={t} style={[styles.tag, role === 'lawyer' && styles.tagActive]}>
-                  <Text style={[styles.tagText, role === 'lawyer' && { color: COLORS.primary }]}>{t}</Text>
-                </View>
-              ))}
-            </View>
-          </View>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.card, role === 'law_student' && styles.cardActive]}
-          onPress={() => setRole('law_student')}
-          activeOpacity={0.8}
-        >
-          <View style={[styles.iconWrap, role === 'law_student' && styles.iconWrapActive]}>
-            <MaterialCommunityIcons name="school-outline" size={28} color={role === 'law_student' ? '#fff' : COLORS.primary} />
-          </View>
-          <View style={styles.cardBody}>
-            <View style={styles.cardTop}>
-              <Text style={[styles.roleLabel, role === 'law_student' && { color: COLORS.primary }]}>I am a Law Student</Text>
-              {role === 'law_student' && <MaterialCommunityIcons name="check-circle" size={20} color={COLORS.primary} />}
-            </View>
-            <Text style={styles.roleDesc}>Studying law at a Nigerian university or law school — moot prep, case summaries, mentorship, and pupillage search.</Text>
-            <View style={styles.tags}>
-              {['University', 'Law School', 'LLB', 'BL Student'].map((t) => (
-                <View key={t} style={[styles.tag, role === 'law_student' && styles.tagActive]}>
-                  <Text style={[styles.tagText, role === 'law_student' && { color: COLORS.primary }]}>{t}</Text>
-                </View>
-              ))}
-            </View>
-          </View>
-        </TouchableOpacity>
-      </View>
+      <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false} contentContainerStyle={{ gap: 10 }}>
+        {GENERAL_SUBROLES.map((s) => {
+          const active = subRole === s.id;
+          return (
+            <TouchableOpacity
+              key={s.id}
+              style={[styles.subCard, active && styles.cardActiveGreen]}
+              onPress={() => setSubRole(s.id)}
+              activeOpacity={0.8}
+            >
+              <View style={[styles.subIconWrap, active && styles.iconWrapGreen]}>
+                <MaterialCommunityIcons name={s.icon as any} size={22} color={active ? '#fff' : '#2e7d32'} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.subLabel, active && { color: '#2e7d32' }]}>{s.label}</Text>
+                <Text style={styles.subDesc}>{s.desc}</Text>
+              </View>
+              {active && <MaterialCommunityIcons name="check-circle" size={20} color="#2e7d32" />}
+            </TouchableOpacity>
+          );
+        })}
+      </ScrollView>
 
       <View style={styles.footer}>
         <Button
           mode="contained"
-          onPress={() => role && save(role)}
-          disabled={!role || saving}
+          onPress={() => subRole && save('general_user', subRole)}
+          disabled={!subRole || saving}
           loading={saving}
           style={styles.continueBtn}
           contentStyle={{ paddingVertical: 6 }}
         >
           Get Started
         </Button>
-        <TouchableOpacity onPress={() => save('general_user')} disabled={saving} style={styles.skipBtn}>
-          <Text style={styles.skipText}>Skip for now</Text>
-        </TouchableOpacity>
       </View>
     </View>
   );
@@ -211,12 +268,8 @@ const styles = StyleSheet.create({
   backBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 24 },
   backText: { fontSize: 15, color: COLORS.text, fontWeight: '600' },
   header: { alignItems: 'center', marginBottom: 28 },
-  lbLogoWrap: {
-    width: 80, height: 80, borderRadius: 20, overflow: 'hidden', marginBottom: 20,
-    shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 8, shadowOffset: { width: 0, height: 3 },
-    elevation: 5,
-  },
   lbLogoImg: { width: 80, height: 80 },
+  lbLogoImgSmall: { width: 56, height: 56, marginBottom: 8 },
   title: { fontSize: 24, fontWeight: '800', color: COLORS.text, marginBottom: 8, textAlign: 'center' },
   subtitle: { fontSize: 14, color: COLORS.textSecondary, textAlign: 'center', lineHeight: 21 },
   cards: { gap: 14, flex: 1 },
@@ -245,8 +298,18 @@ const styles = StyleSheet.create({
   tagActive: { borderColor: COLORS.primary },
   tagActiveGreen: { borderColor: '#2e7d32' },
   tagText: { fontSize: 11, color: COLORS.textSecondary, fontWeight: '600' },
+  // compact sub-role rows
+  subCard: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    backgroundColor: COLORS.surface, borderRadius: 14,
+    borderWidth: 1.5, borderColor: COLORS.border, padding: 14,
+  },
+  subIconWrap: {
+    width: 42, height: 42, borderRadius: 12, backgroundColor: '#2e7d3212',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  subLabel: { fontSize: 15.5, fontWeight: '700', color: COLORS.text },
+  subDesc: { fontSize: 12.5, color: COLORS.textSecondary, lineHeight: 17, marginTop: 1 },
   footer: { paddingTop: 20 },
   continueBtn: { borderRadius: 12, marginBottom: 4 },
-  skipBtn: { alignItems: 'center', paddingVertical: 12 },
-  skipText: { color: COLORS.textSecondary, fontWeight: '600', fontSize: 14 },
 });

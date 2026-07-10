@@ -2,14 +2,14 @@
   "expo": {
     "name": "LegalBridge",
     "slug": "legalbridge",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/icon-owl.png",
     "scheme": "legalbridge",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "splash": {
-      "image": "./assets/splash-icon.png",
+      "image": "./assets/splash-owl.png",
       "resizeMode": "contain",
       "backgroundColor": "#0d1b3e"
     },
@@ -19,12 +19,11 @@
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/android-icon-foreground.png",
-        "backgroundImage": "./assets/android-icon-background.png",
-        "monochromeImage": "./assets/android-icon-monochrome.png",
+        "foregroundImage": "./assets/adaptive-owl.png",
         "backgroundColor": "#0d1b3e"
       },
       "package": "ng.legalbridge.app",
+      "versionCode": 12,
       "permissions": [
         "android.permission.INTERNET",
         "android.permission.RECORD_AUDIO",
@@ -40,6 +39,15 @@
     },
     "plugins": [
       "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-owl.png",
+          "imageWidth": 250,
+          "resizeMode": "contain",
+          "backgroundColor": "#0d1b3e"
+        }
+      ],
       "expo-secure-store",
       [
         "expo-camera",
@@ -54,6 +62,14 @@
         "expo-image-picker",
         {
           "photosPermission": "LegalBridge needs access to your photos so you can attach a document or image for the AI to analyse."
+        }
+      ],
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "LegalBridge uses the microphone to turn your speech into text so you can dictate messages.",
+          "speechRecognitionPermission": "LegalBridge uses speech recognition to convert your voice into text.",
+          "androidSpeechServicePackages": ["com.google.android.googlequicksearchbox"]
         }
       ]
     ],
@@ -71,7 +87,8 @@
       "policy": "appVersion"
     },
     "updates": {
-      "url": "https://u.expo.dev/5f6eb0b7-c724-4807-9b8e-1801a2dcc008"
+      "url": "https://u.expo.dev/5f6eb0b7-c724-4807-9b8e-1801a2dcc008",
+      "fallbackToCacheTimeout": 0
     }
   }
 }

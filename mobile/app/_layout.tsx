@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { Stack, useRouter, useSegments } from 'expo-router';
+import { Stack, useRouter, useSegments, ThemeProvider, DefaultTheme } from 'expo-router';
 import { PaperProvider } from 'react-native-paper';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
@@ -65,19 +65,33 @@ export default function RootLayout() {
     return () => subscription.unsubscribe();
   }, []);
 
+  // The navigation container's own theme paints the canvas BEHIND every screen —
+  // this is where the white flash after the splash came from. Match it (and the
+  // root view) to the app background so no white layer ever shows.
+  const navTheme = {
+    ...DefaultTheme,
+    colors: { ...DefaultTheme.colors, background: lightTheme.colors.background },
+  };
+
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
+    <GestureHandlerRootView style={{ flex: 1, backgroundColor: lightTheme.colors.background }}>
       <KeyboardProvider>
         <PaperProvider theme={theme}>
-          <StatusBar style={colorScheme === 'dark' ? 'light' : 'dark'} />
-          <AuthGuard>
-            <Stack screenOptions={{ headerShown: false }}>
-              <Stack.Screen name="index" />
-              <Stack.Screen name="(auth)" />
-              <Stack.Screen name="(main)" />
-              <Stack.Screen name="(legal)" />
-            </Stack>
-          </AuthGuard>
+          <ThemeProvider value={navTheme}>
+            <StatusBar style={colorScheme === 'dark' ? 'light' : 'dark'} />
+            <AuthGuard>
+              <Stack screenOptions={{
+                headerShown: false,
+                contentStyle: { backgroundColor: lightTheme.colors.background },
+                animation: 'fade',
+              }}>
+                <Stack.Screen name="index" />
+                <Stack.Screen name="(auth)" />
+                <Stack.Screen name="(main)" />
+                <Stack.Screen name="(legal)" />
+              </Stack>
+            </AuthGuard>
+          </ThemeProvider>
         </PaperProvider>
       </KeyboardProvider>
     </GestureHandlerRootView>
