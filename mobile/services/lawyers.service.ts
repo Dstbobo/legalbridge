@@ -13,7 +13,8 @@ export interface LawyerVerification {
   specializations: string[];
   bio: string | null;
   cert_path: string | null;
-  status: 'pending' | 'verified' | 'rejected';
+  status: 'unverified' | 'pending' | 'verified' | 'rejected';
+  experience_label?: string | null;
   admin_note: string | null;
   created_at: string;
 }
@@ -119,6 +120,17 @@ export async function listVerifiedLawyers(): Promise<LawyerVerification[]> {
     .select('id,user_id,full_name,scn_number,year_of_call,state,firm,whatsapp,specializations,bio,cert_path,status,admin_note,created_at')
     .eq('status', 'verified')
     .order('created_at', { ascending: true });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as LawyerVerification[];
+}
+
+/**
+ * Directory-safe projection of every lawyer account. Profiles stay private;
+ * the RPC returns only fields intended for public display and carries an
+ * explicit verification status for honest badges in the UI.
+ */
+export async function listDirectoryLawyers(): Promise<LawyerVerification[]> {
+  const { data, error } = await supabase.rpc('list_lawyer_directory');
   if (error) throw new Error(error.message);
   return (data ?? []) as LawyerVerification[];
 }

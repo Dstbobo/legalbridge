@@ -10,7 +10,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { COLORS } from '@/constants/theme';
 import { useAuthStore } from '@/stores/auth.store';
 import { isLawyer } from '@/constants/roles';
-import { listVerifiedLawyers, type LawyerVerification } from '@/services/lawyers.service';
+import { listDirectoryLawyers, type LawyerVerification } from '@/services/lawyers.service';
 import {
   getOrCreateConversation, sendChatMessage, fetchReviewSummaries, submitReview,
   type ReviewSummary,
@@ -29,6 +29,7 @@ function colorOf(name: string): string {
   return AVATAR_COLORS[h % AVATAR_COLORS.length];
 }
 function experienceOf(l: LawyerVerification): string {
+  if (l.experience_label) return l.experience_label;
   if (!l.year_of_call) return 'Practising lawyer';
   const yrs = Math.max(0, new Date().getFullYear() - l.year_of_call);
   return yrs > 0 ? `${yrs} year${yrs > 1 ? 's' : ''} at the bar` : 'Newly called';
@@ -46,9 +47,15 @@ function LawyerCard({ lawyer, rating, onView }: {
         <View style={styles.cardInfo}>
           <View style={styles.nameRow}>
             <Text style={styles.lawyerName} numberOfLines={1}>{lawyer.full_name}</Text>
-            <View style={styles.verifiedBadge}>
-              <MaterialCommunityIcons name="check-decagram" size={11} color="#2ecc71" />
-              <Text style={styles.verifiedText}>SCN Verified</Text>
+            <View style={lawyer.status === 'verified' ? styles.verifiedBadge : styles.pendingBadge}>
+              <MaterialCommunityIcons
+                name={lawyer.status === 'verified' ? 'check-decagram' : 'clock-outline'}
+                size={11}
+                color={lawyer.status === 'verified' ? '#2ecc71' : '#b45309'}
+              />
+              <Text style={lawyer.status === 'verified' ? styles.verifiedText : styles.pendingText}>
+                {lawyer.status === 'verified' ? 'SCN Verified' : 'Verification pending'}
+              </Text>
             </View>
           </View>
           {!!lawyer.firm && <Text style={styles.lawyerFirm} numberOfLines={1}>{lawyer.firm}</Text>}
@@ -125,10 +132,16 @@ function LawyerModal({ lawyer, onClose, onBook }: {
             <Text style={styles.modalName}>{lawyer.full_name}</Text>
             {!!lawyer.firm && <Text style={styles.modalSub}>{lawyer.firm}</Text>}
 
-            <View style={styles.verifiedRow}>
-              <MaterialCommunityIcons name="check-decagram" size={16} color="#2ecc71" />
-              <Text style={styles.verifiedRowText}>
-                Identity verified against Supreme Court enrolment ({lawyer.scn_number})
+            <View style={lawyer.status === 'verified' ? styles.verifiedRow : styles.pendingRow}>
+              <MaterialCommunityIcons
+                name={lawyer.status === 'verified' ? 'check-decagram' : 'alert-circle-outline'}
+                size={16}
+                color={lawyer.status === 'verified' ? '#2ecc71' : '#b45309'}
+              />
+              <Text style={lawyer.status === 'verified' ? styles.verifiedRowText : styles.pendingRowText}>
+                {lawyer.status === 'verified'
+                  ? `Identity verified against Supreme Court enrolment (${lawyer.scn_number})`
+                  : 'This lawyer account has not yet completed LegalBridge SCN verification.'}
               </Text>
             </View>
 
@@ -268,7 +281,7 @@ export default function LawyersScreen() {
 
   async function load() {
     try {
-      const list = await listVerifiedLawyers();
+      const list = await listDirectoryLawyers();
       setLawyers(list);
       fetchReviewSummaries(list.map((l) => l.user_id)).then(setRatings).catch(() => {});
     } catch { /* keep last list */ }
@@ -287,6 +300,8 @@ export default function LawyersScreen() {
   });
 
   const states = new Set(lawyers.map((l) => l.state).filter(Boolean));
+  const verifiedCount = lawyers.filter((l) => l.status === 'verified').length;
+  const pendingCount = lawyers.length - verifiedCount;
 
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
@@ -343,7 +358,7 @@ export default function LawyersScreen() {
             </View>
             <Text style={styles.counselDisclaimer}>
               AI assistant — general legal information, not a substitute for a lawyer. For representation,
-              choose a verified lawyer below.
+              review each lawyer's verification badge before making contact.
             </Text>
           </LinearGradient>
         </TouchableOpacity>
@@ -369,9 +384,9 @@ export default function LawyersScreen() {
 
         <View style={styles.statsBar}>
           {[
-            { num: String(lawyers.length), label: 'Verified Lawyers' },
-            { num: String(states.size || '—'), label: 'States' },
-            { num: '100%', label: 'SCN Checked' },
+            { num: String(lawyers.length), label: 'Lawyer Accounts' },
+            { num: String(verifiedCount), label: 'SCN Verified' },
+            { num: String(pendingCount), label: 'Pending' },
           ].map((s, i) => (
             <View key={s.label} style={[styles.stat, i < 2 && styles.statBorder]}>
               <Text style={styles.statNum}>{s.num}</Text>
@@ -399,7 +414,7 @@ export default function LawyersScreen() {
                   <MaterialCommunityIcons name="shield-account-outline" size={44} color={COLORS.border} />
                   <Text style={styles.emptyText}>
                     {lawyers.length === 0
-                      ? 'Verified lawyers will appear here.\nEvery lawyer is checked against their Supreme Court enrolment (SCN) before listing — no impersonators.'
+                      ? 'Lawyer accounts will appear here after signup. Check each profile badge to see whether SCN verification is complete.'
                       : 'No lawyers match your search'}
                   </Text>
                 </View>
@@ -475,6 +490,8 @@ const styles = StyleSheet.create({
   lawyerName: { fontSize: 14, fontWeight: '700', color: COLORS.text, flex: 1 },
   verifiedBadge: { flexDirection: 'row', alignItems: 'center', gap: 3, backgroundColor: 'rgba(46,204,113,0.1)', borderRadius: 4, paddingHorizontal: 5, paddingVertical: 1, borderWidth: 1, borderColor: 'rgba(46,204,113,0.25)' },
   verifiedText: { fontSize: 10, color: '#2ecc71', fontWeight: '700' },
+  pendingBadge: { flexDirection: 'row', alignItems: 'center', gap: 3, backgroundColor: 'rgba(180,83,9,0.1)', borderRadius: 4, paddingHorizontal: 5, paddingVertical: 1, borderWidth: 1, borderColor: 'rgba(180,83,9,0.25)' },
+  pendingText: { fontSize: 10, color: '#b45309', fontWeight: '700' },
   lawyerFirm: { fontSize: 12, color: COLORS.textSecondary },
   tagRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 10 },
   tag: { backgroundColor: `${COLORS.primary}18`, borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3, borderWidth: 1, borderColor: `${COLORS.primary}30` },
@@ -508,6 +525,12 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: 'rgba(46,204,113,0.2)',
   },
   verifiedRowText: { flex: 1, fontSize: 12.5, color: '#1e8449', lineHeight: 17, fontWeight: '600' },
+  pendingRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 8, justifyContent: 'center',
+    backgroundColor: 'rgba(180,83,9,0.08)', borderRadius: 10, padding: 10, marginBottom: 16,
+    borderWidth: 1, borderColor: 'rgba(180,83,9,0.2)',
+  },
+  pendingRowText: { flex: 1, fontSize: 12.5, color: '#92400e', lineHeight: 17, fontWeight: '600' },
   modalSectionTitle: { fontSize: 11, fontWeight: '700', color: COLORS.textSecondary, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 },
   modalBio: { fontSize: 14, color: COLORS.textSecondary, lineHeight: 22, marginBottom: 14 },
   modalActions: { gap: 10, marginTop: 20 },
