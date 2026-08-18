@@ -71,3 +71,24 @@ test('admin functions keep the service role server-side and enable gateway JWT c
     assert.equal(source.includes('failed, alreadySent'), false);
   }
 });
+
+test('Live uses verified short-lived tickets instead of caller identity query fields', async () => {
+  const edgeSource = await functionSource('live');
+  const mobileSource = await readFile(
+    new URL('../../../mobile/services/geminiLive.ts', import.meta.url),
+    'utf8',
+  );
+  const config = await readFile(new URL('../../config.toml', import.meta.url), 'utf8');
+
+  assert.match(edgeSource, /await requirePrincipal\(req/);
+  assert.match(edgeSource, /await issueLiveTicket\(principal\.id/);
+  assert.match(edgeSource, /await verifyLiveTicket\(ticket/);
+  assert.equal(mobileSource.includes('userId=${'), false);
+  assert.equal(mobileSource.includes('apikey=${encodeURIComponent'), false);
+  assert.match(mobileSource, /await requestLiveTicket\(\)/);
+  assert.match(
+    config,
+    /\[functions\.live\]\s+verify_jwt\s*=\s*false/,
+    'Live may bypass gateway JWT only because the handler verifies POST auth and signed WS tickets',
+  );
+});

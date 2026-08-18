@@ -2,6 +2,7 @@ import { AudioModule, setAudioModeAsync, createAudioPlayer, type AudioPlayer } f
 import * as FileSystem from 'expo-file-system/legacy';
 import LiveAudioStream from 'react-native-live-audio-stream';
 import { type UserRole } from '@/constants/roles';
+import { supabase } from './auth.service';
 
 // The phone talks ONLY to our Supabase Edge Function proxy (functions/v1/live),
 // which holds the Gemini key and relays to Google's BidiGenerateContent API.
@@ -10,6 +11,30 @@ const ANON = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? '';
 
 // Live API model with native-audio dialog (same as the proven reference setup).
 const LIVE_MODEL = 'models/gemini-2.5-flash-native-audio-latest';
+
+async function requestLiveTicket(): Promise<string> {
+  let { data } = await supabase.auth.getSession();
+  if (!data.session?.access_token) {
+    ({ data } = await supabase.auth.refreshSession());
+  }
+  const accessToken = data.session?.access_token;
+  if (!accessToken) throw new Error('You must be signed in to use Live.');
+
+  const ticketUrl = BASE.replace(/^wss:/, 'https:').replace(/^ws:/, 'http:');
+  const response = await fetch(ticketUrl, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      apikey: ANON,
+      'Content-Type': 'application/json',
+    },
+    body: '{}',
+  });
+  if (!response.ok) throw new Error('Live authorization failed. Please sign in again.');
+  const result = await response.json();
+  if (!result?.ticket) throw new Error('Live authorization did not return a ticket.');
+  return result.ticket as string;
+}
 
 export type LiveStatus =
   | 'connecting'
@@ -239,7 +264,7 @@ export class LiveSession {
       log('setAudioMode failed (non-fatal):', (e as Error)?.message);
     }
 
-    this.openSocket();
+    await this.openSocket();
   }
 
   private setupTimer: ReturnType<typeof setTimeout> | null = null;
@@ -273,10 +298,12 @@ export class LiveSession {
     if (this.setupTimer) { clearTimeout(this.setupTimer); this.setupTimer = null; }
   }
 
-  private openSocket() {
+  private async openSocket() {
     this.cb.onStatus?.('connecting');
-    const url =
-      `${BASE}?apikey=${encodeURIComponent(ANON)}&userId=${encodeURIComponent(this.userId ?? '')}`;
+    const ticket = await requestLiveTicket();
+    if (this.closed) return;
+    const separator = BASE.includes('?') ? '&' : '?';
+    const url = `${BASE}${separator}ticket=${encodeURIComponent(ticket)}`;
     log('connecting to proxy');
     const ws = new WebSocket(url);
     (ws as any).binaryType = 'arraybuffer';
@@ -308,7 +335,14 @@ export class LiveSession {
         const delay = Math.min(2000, 300 * this.reconnectAttempts);
         log(`reconnecting (attempt ${this.reconnectAttempts}) in ${delay}ms, resume=${!!this.resumeHandle}`);
         if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
-        this.reconnectTimer = setTimeout(() => { if (!this.closed) this.openSocket(); }, delay);
+        this.reconnectTimer = setTimeout(() => {
+          if (!this.closed) {
+            this.openSocket().catch((error) => {
+              this.cb.onError?.((error as Error)?.message ?? 'Live authorization failed.');
+              this.cb.onStatus?.('error');
+            });
+          }
+        }, delay);
         return;
       }
 

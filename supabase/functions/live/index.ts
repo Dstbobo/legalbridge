@@ -12,8 +12,16 @@
 // Gemini sends its JSON frames as BINARY; React Native cannot read Blob
 // payloads, so every upstream frame is forwarded to the phone as TEXT.
 // ───────────────────────────────────────────────────────────────────────────
+import { issueLiveTicket, verifyLiveTicket } from '../_shared/live_ticket.ts';
+import {
+  requirePrincipal,
+  securityErrorResponse,
+} from '../_shared/security.ts';
 
 const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY') ?? '';
+const LIVE_TICKET_SECRET = Deno.env.get('LIVE_TICKET_SECRET') ?? '';
+const SUPABASE_URL = Deno.env.get('SUPABASE_URL') ?? '';
+const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
 const GEMINI_HOST =
   'wss://generativelanguage.googleapis.com/ws/' +
   'google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent';
@@ -22,18 +30,54 @@ function log(...args: unknown[]) {
   console.log('[live]', ...args);
 }
 
-Deno.serve((req) => {
+const CORS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Content-Type': 'application/json',
+};
+
+Deno.serve(async (req) => {
+  if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS });
   const upgrade = (req.headers.get('upgrade') || '').toLowerCase();
   if (upgrade !== 'websocket') {
-    // Health check / non-WS hit.
+    if (req.method === 'POST') {
+      try {
+        const principal = await requirePrincipal(req, {
+          supabaseUrl: SUPABASE_URL,
+          anonKey: SUPABASE_ANON_KEY,
+        });
+        if (principal.kind !== 'user') throw new Error('unexpected principal');
+        const ticket = await issueLiveTicket(principal.id, LIVE_TICKET_SECRET);
+        return new Response(JSON.stringify({ ticket, expiresIn: 60 }), { headers: CORS });
+      } catch (error) {
+        return securityErrorResponse(error, CORS);
+      }
+    }
+    if (req.method !== 'GET') {
+      return new Response(JSON.stringify({ error: 'method_not_allowed' }), {
+        status: 405,
+        headers: CORS,
+      });
+    }
+    // Non-provider health check. It never opens a Gemini connection.
     return new Response(
       JSON.stringify({ status: 'ok', service: 'legalbridge-live', configured: !!GEMINI_API_KEY }),
-      { headers: { 'content-type': 'application/json' } },
+      { headers: CORS },
     );
   }
 
   if (!GEMINI_API_KEY) {
-    return new Response('GEMINI_API_KEY not configured', { status: 500 });
+    return new Response(JSON.stringify({ error: 'live_not_configured' }), {
+      status: 503,
+      headers: CORS,
+    });
+  }
+
+  try {
+    const ticket = new URL(req.url).searchParams.get('ticket') ?? '';
+    await verifyLiveTicket(ticket, LIVE_TICKET_SECRET);
+  } catch (error) {
+    return securityErrorResponse(error, CORS);
   }
 
   const { socket: phone, response } = Deno.upgradeWebSocket(req);
