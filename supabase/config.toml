@@ -35,3 +35,15 @@ verify_jwt = true
 
 [functions.chat-tools]
 verify_jwt = true
+
+[functions.broadcast-apology]
+verify_jwt = true
+
+[functions.broadcast-live]
+verify_jwt = true
+
+[functions.broadcast-update]
+verify_jwt = true
+
+[functions.engine-check]
+verify_jwt = true

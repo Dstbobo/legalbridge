@@ -1,28 +1,31 @@
 // One-off diagnostic: pings each AI provider with a tiny request and reports
 // the exact HTTP status/error from each, so outages are diagnosed in seconds
-// instead of guessing. Admin-only by capability (service key required).
-import { createClient } from 'jsr:@supabase/supabase-js@2';
+// instead of guessing. Admin-only through verified server-managed app metadata.
+import {
+  requireAdminPrincipal,
+  requireMethod,
+  securityErrorResponse,
+} from '../_shared/security.ts';
 
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') ?? '';
 const GEMINI_KEY = Deno.env.get('GEMINI_API_KEY') ?? '';
 const GROQ_KEY = Deno.env.get('GROQ_API_KEY') ?? '';
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
+const ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!;
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-admin-key',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS });
 
-  const adminKey = req.headers.get('x-admin-key') ?? '';
-  const admin = createClient(SUPABASE_URL, adminKey);
-  const authCheck = await admin.auth.admin.listUsers({ page: 1, perPage: 1 });
-  if (authCheck.error) {
-    return new Response(JSON.stringify({ error: 'unauthorized' }), {
-      status: 401, headers: { ...CORS, 'Content-Type': 'application/json' },
-    });
+  try {
+    requireMethod(req, 'POST');
+    await requireAdminPrincipal(req, { supabaseUrl: SUPABASE_URL, anonKey: ANON_KEY });
+  } catch (error) {
+    return securityErrorResponse(error, CORS);
   }
 
   const out: Record<string, unknown> = {

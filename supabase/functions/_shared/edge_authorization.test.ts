@@ -3,6 +3,12 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 const FUNCTION_NAMES = ['chat-stream', 'chat-documents', 'chat-tools'] as const;
+const ADMIN_FUNCTION_NAMES = [
+  'broadcast-apology',
+  'broadcast-live',
+  'broadcast-update',
+  'engine-check',
+] as const;
 
 async function functionSource(name: string): Promise<string> {
   return readFile(new URL(`../${name}/index.ts`, import.meta.url), 'utf8');
@@ -42,5 +48,26 @@ test('Supabase gateway JWT verification is explicit for paid chat functions', as
       new RegExp(`\\[functions\\.${name}\\]\\s+verify_jwt\\s*=\\s*true`),
       `${name} must fail at the gateway as well as in the handler`,
     );
+  }
+});
+
+test('broadcast and diagnostic functions require explicit admin identity', async () => {
+  for (const name of ADMIN_FUNCTION_NAMES) {
+    const source = await functionSource(name);
+    assert.match(source, /await requireAdminPrincipal\(req/);
+    assert.equal(source.includes('x-admin-key'), false);
+    assert.equal(source.includes('?? SERVICE_KEY'), false);
+  }
+});
+
+test('admin functions keep the service role server-side and enable gateway JWT checks', async () => {
+  const config = await readFile(new URL('../../config.toml', import.meta.url), 'utf8');
+  for (const name of ADMIN_FUNCTION_NAMES) {
+    assert.match(config, new RegExp(`\\[functions\\.${name}\\]\\s+verify_jwt\\s*=\\s*true`));
+  }
+  for (const name of ADMIN_FUNCTION_NAMES.filter((name) => name.startsWith('broadcast-'))) {
+    const source = await functionSource(name);
+    assert.match(source, /createClient\(SUPABASE_URL, SERVICE_KEY\)/);
+    assert.equal(source.includes('failed, alreadySent'), false);
   }
 });

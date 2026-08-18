@@ -1,22 +1,28 @@
 // "LegalBridge now speaks your language" broadcast — announces the v11 update
 // (Nigerian languages + new look) to every registered user.
 //
-// Admin-only: caller must present a genuine service-role key in x-admin-key
-// (validated by capability — only a service key can list users). Run with
-// ?dryRun=1 first to get the recipient count without sending. Each user is
+// Admin-only: caller must present a verified user JWT whose server-managed
+// app_metadata grants the LegalBridge admin role. Run with ?dryRun=1 first to
+// get the recipient count without sending. Each user is
 // marked (user_metadata.announced_langs) after a successful send so re-runs
 // never double-email anyone. Sends are throttled for Resend rate limits.
 import { createClient } from 'jsr:@supabase/supabase-js@2';
+import {
+  requireAdminPrincipal,
+  requireMethod,
+  securityErrorResponse,
+} from '../_shared/security.ts';
 
 const RESEND_KEY = Deno.env.get('RESEND_API_KEY') ?? '';
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
+const ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!;
 const SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const FROM = 'LegalBridge <hello@legalbridge.ng>';
 const FLAG = 'announced_langs';
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-admin-key',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
 function firstName(name: string, email: string): string {
@@ -78,15 +84,13 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS });
 
-  // Authorize by capability: only a genuine service-role key can list users.
-  const adminKey = req.headers.get('x-admin-key') ?? SERVICE_KEY;
-  const admin = createClient(SUPABASE_URL, adminKey);
-  const authCheck = await admin.auth.admin.listUsers({ page: 1, perPage: 1 });
-  if (authCheck.error) {
-    return new Response(JSON.stringify({ error: 'unauthorized' }), {
-      status: 401, headers: { ...CORS, 'Content-Type': 'application/json' },
-    });
+  try {
+    requireMethod(req, 'POST');
+    await requireAdminPrincipal(req, { supabaseUrl: SUPABASE_URL, anonKey: ANON_KEY });
+  } catch (error) {
+    return securityErrorResponse(error, CORS);
   }
+  const admin = createClient(SUPABASE_URL, SERVICE_KEY);
 
   const dryRun = new URL(req.url).searchParams.get('dryRun') === '1';
 
@@ -96,8 +100,8 @@ Deno.serve(async (req) => {
   for (let page = 1; page <= 50; page++) {
     const { data, error } = await admin.auth.admin.listUsers({ page, perPage: 200 });
     if (error) {
-      return new Response(JSON.stringify({ error: 'listUsers failed', detail: error.message }), {
-        status: 500, headers: { ...CORS, 'Content-Type': 'application/json' },
+      return new Response(JSON.stringify({ error: 'list_users_failed' }), {
+        status: 502, headers: { ...CORS, 'Content-Type': 'application/json' },
       });
     }
     const users = data?.users ?? [];
@@ -155,7 +159,7 @@ Deno.serve(async (req) => {
     await sleep(600);
   }
 
-  return new Response(JSON.stringify({ sent, failedCount: failed.length, failed, alreadySent }), {
+  return new Response(JSON.stringify({ sent, failedCount: failed.length, alreadySent }), {
     headers: { ...CORS, 'Content-Type': 'application/json' },
   });
 });
