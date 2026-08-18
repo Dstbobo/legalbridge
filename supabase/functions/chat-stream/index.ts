@@ -17,6 +17,12 @@
 // ════════════════════════════════════════════════════════════════════
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import {
+  readJsonBody,
+  requireMethod,
+  requirePrincipal,
+  securityErrorResponse,
+} from "../_shared/security.ts";
 
 const ANTHROPIC_KEY = Deno.env.get("ANTHROPIC_API_KEY")!;
 const GEMINI_KEY    = Deno.env.get("GEMINI_API_KEY") ?? '';
@@ -24,6 +30,7 @@ const GROQ_KEY      = Deno.env.get("GROQ_API_KEY") ?? '';
 const SUPABASE_URL  = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_KEY  = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const SUPABASE_ANON = Deno.env.get("SUPABASE_ANON_KEY")!;
+const MAX_CHAT_REQUEST_BYTES = 6 * 1024 * 1024;
 
 const MODEL = 'claude-sonnet-4-5';
 // Fallbacks when Claude is unavailable (credits/rate limits) — users never see an outage.
@@ -578,47 +585,34 @@ serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS });
 
   try {
-    const body = await req.json();
+    requireMethod(req, 'POST');
+    const principal = await requirePrincipal(req, {
+      supabaseUrl: SUPABASE_URL,
+      anonKey: SUPABASE_ANON,
+    });
+    if (principal.kind !== 'user') throw new Error('unexpected principal');
+    const userId = principal.id;
+    const body = await readJsonBody<any>(req, MAX_CHAT_REQUEST_BYTES);
     const {
       mode    = 'message',  // 'status' | 'message'
       message = '',
       images  = [],
       chatId  = null,
-      // Frontend may pass userType when calling status mode unauthenticated
-      // (e.g. parallel calls before chatId exists). For 'message' mode the
-      // userType is always loaded from the profile.
-      userType: bodyUserType = 'other',
       // User's chosen answer language ('en' default, or pcm/yo/ha/ig).
       language = 'en',
     } = body;
 
-    // ─── AUTH — resolve user from JWT ─────────────────────────────────
-    let userId = '';
-    try {
-      const token = (req.headers.get('Authorization') || '').replace('Bearer ', '');
-      if (token) {
-        const userRes = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
-          headers: { Authorization: `Bearer ${token}`, apikey: SUPABASE_KEY },
-        });
-        const userData = await userRes.json();
-        userId = userData?.id || '';
-      }
-    } catch { /* anonymous user */ }
-
     // ─── MODE: STATUS (fast, no streaming, no history needed) ─────────
     if (mode === 'status') {
-      // For status mode we use the body-supplied userType if no user is
-      // authenticated. Authenticated callers get their profile role.
-      let resolvedType = bodyUserType;
-      if (userId) {
-        try {
-          const profRes = await fetch(`${SUPABASE_URL}/rest/v1/profiles?id=eq.${userId}&select=user_type`, {
-            headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` },
-          });
-          const ps = await profRes.json();
-          if (ps?.[0]?.user_type) resolvedType = ps[0].user_type;
-        } catch { /* fall back to body */ }
-      }
+      let resolvedType = 'other';
+      try {
+        const profRes = await fetch(`${SUPABASE_URL}/rest/v1/profiles?id=eq.${userId}&select=user_type`, {
+          headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` },
+          signal: AbortSignal.timeout(8_000),
+        });
+        const ps = await profRes.json();
+        if (ps?.[0]?.user_type) resolvedType = ps[0].user_type;
+      } catch { /* retain the least-privileged persona */ }
       return await handleStatus(message, resolvedType);
     }
 
@@ -662,7 +656,7 @@ serve(async (req) => {
       }).catch(() => {});
     }
 
-    const incomingAuth = req.headers.get('Authorization') || `Bearer ${SUPABASE_ANON}`;
+    const incomingAuth = req.headers.get('Authorization')!;
     const basePayload = {
       messages: currentMessages,
       userType,
@@ -700,10 +694,7 @@ serve(async (req) => {
 
     return streamClaude(systemPrompt, currentMessages, intent, prefersGemini(language));
 
-  } catch (err: any) {
-    return new Response(
-      JSON.stringify({ success: false, error: err.message }),
-      { status: 500, headers: { ...CORS, 'Content-Type': 'application/json' } }
-    );
+  } catch (err: unknown) {
+    return securityErrorResponse(err, CORS);
   }
 });

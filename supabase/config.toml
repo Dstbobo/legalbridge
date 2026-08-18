@@ -26,3 +26,12 @@ verify_jwt = false
 
 [functions.news-ingest]
 verify_jwt = false
+
+[functions.chat-stream]
+verify_jwt = true
+
+[functions.chat-documents]
+verify_jwt = true
+
+[functions.chat-tools]
+verify_jwt = true

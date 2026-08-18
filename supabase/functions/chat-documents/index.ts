@@ -1,4 +1,10 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import {
+  readJsonBody,
+  requireMethod,
+  requirePrincipal,
+  securityErrorResponse,
+} from "../_shared/security.ts";
 
 const ANTHROPIC_KEY = Deno.env.get("ANTHROPIC_API_KEY")!;
 // Smart fallback chain (Claude → Gemini → Groq) so document drafting keeps
@@ -9,6 +15,8 @@ const GEMINI_FALLBACK_MODELS = ['gemini-flash-latest', 'gemini-3-flash-preview',
 const GROQ_FALLBACK_MODEL = 'llama-3.3-70b-versatile';
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+const SUPABASE_ANON = Deno.env.get("SUPABASE_ANON_KEY")!;
+const MAX_DOCUMENT_REQUEST_BYTES = 512 * 1024;
 
 // ══════════════════════════════════════════════════════
 // TEMPLATE LOOKUP — fetch a stored template that matches
@@ -307,14 +315,37 @@ serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS });
 
   try {
-    const body = await req.json();
+    requireMethod(req, 'POST');
+    const principal = await requirePrincipal(req, {
+      supabaseUrl: SUPABASE_URL,
+      anonKey: SUPABASE_ANON,
+    });
+    if (principal.kind !== 'user') throw new Error('unexpected principal');
+    const body = await readJsonBody<any>(req, MAX_DOCUMENT_REQUEST_BYTES);
     const {
       messages = [],
-      userType = 'other',
       summary = '',
-      profile = {},
       language = 'en',
     } = body;
+
+    // Persona and profile context are server-derived. Callers cannot select a
+    // more privileged identity by changing userType/profile in the payload.
+    let userType = 'other';
+    let profile: Record<string, any> = {};
+    try {
+      const profileResponse = await fetch(
+        `${SUPABASE_URL}/rest/v1/profiles?id=eq.${principal.id}&select=user_type,state,specializations`,
+        {
+          headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` },
+          signal: AbortSignal.timeout(8_000),
+        },
+      );
+      const rows = await profileResponse.json();
+      if (rows?.[0]) {
+        profile = rows[0];
+        userType = rows[0].user_type || 'other';
+      }
+    } catch { /* retain least-privileged defaults */ }
 
     const lastMsg = messages[messages.length - 1]?.content || '';
     const docType = detectDocumentType(lastMsg);
@@ -602,10 +633,7 @@ NEVER wrap the document in markdown code fences (\`\`\`). Output the document di
       }
     });
 
-  } catch (err: any) {
-    return new Response(
-      JSON.stringify({ error: err.message }),
-      { status: 500, headers: { ...CORS, 'Content-Type': 'application/json' } }
-    );
+  } catch (err: unknown) {
+    return securityErrorResponse(err, CORS);
   }
 });

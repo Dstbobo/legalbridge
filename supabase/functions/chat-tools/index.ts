@@ -10,15 +10,23 @@
 //                       + Voyage AI RAG over Nigerian case law
 //
 // Single model rule: Claude Sonnet only. No tier splitting.
-// JWT verification: OFF (called internally by chat-stream)
+// JWT verification: ON; direct and proxied calls both carry the user's JWT.
 // ════════════════════════════════════════════════════════════════════
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import {
+  readJsonBody,
+  requireMethod,
+  requirePrincipal,
+  securityErrorResponse,
+} from "../_shared/security.ts";
 
 const ANTHROPIC_KEY = Deno.env.get("ANTHROPIC_API_KEY")!;
 const VOYAGE_KEY    = Deno.env.get("VOYAGE_API_KEY")!;
 const SUPABASE_URL  = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_KEY  = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+const SUPABASE_ANON = Deno.env.get("SUPABASE_ANON_KEY")!;
+const MAX_TOOLS_REQUEST_BYTES = 15 * 1024 * 1024;
 
 const MODEL = 'claude-sonnet-4-5';
 
@@ -596,17 +604,38 @@ serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS });
 
   try {
-    const body = await req.json();
+    requireMethod(req, 'POST');
+    const principal = await requirePrincipal(req, {
+      supabaseUrl: SUPABASE_URL,
+      anonKey: SUPABASE_ANON,
+    });
+    if (principal.kind !== 'user') throw new Error('unexpected principal');
+    const body = await readJsonBody<any>(req, MAX_TOOLS_REQUEST_BYTES);
     const {
       tool      = 'search',
       messages  = [],
       images    = [],
       documents = [],
-      userType  = 'other',
-      profile   = {},
       summary   = '',
       language  = 'en',
     } = body;
+
+    let userType = 'other';
+    let profile: Record<string, any> = {};
+    try {
+      const profileResponse = await fetch(
+        `${SUPABASE_URL}/rest/v1/profiles?id=eq.${principal.id}&select=user_type,state,court_level,specializations`,
+        {
+          headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` },
+          signal: AbortSignal.timeout(8_000),
+        },
+      );
+      const rows = await profileResponse.json();
+      if (rows?.[0]) {
+        profile = rows[0];
+        userType = rows[0].user_type || 'other';
+      }
+    } catch { /* retain least-privileged defaults */ }
 
     const lastMsg = messages[messages.length - 1]?.content || '';
 
@@ -648,10 +677,7 @@ serve(async (req) => {
     const systemPrompt = buildSearchPrompt(userType, profile) + stateExtras + summaryCtx + langCtx;
     return handleSearch(systemPrompt, messages);
 
-  } catch (err: any) {
-    return new Response(
-      JSON.stringify({ error: err.message }),
-      { status: 500, headers: { ...CORS, 'Content-Type': 'application/json' } }
-    );
+  } catch (err: unknown) {
+    return securityErrorResponse(err, CORS);
   }
 });
