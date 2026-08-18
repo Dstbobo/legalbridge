@@ -49,12 +49,12 @@ function LawyerCard({ lawyer, rating, onView }: {
             <Text style={styles.lawyerName} numberOfLines={1}>{lawyer.full_name}</Text>
             <View style={lawyer.status === 'verified' ? styles.verifiedBadge : styles.pendingBadge}>
               <MaterialCommunityIcons
-                name={lawyer.status === 'verified' ? 'check-decagram' : lawyer.status === 'pending' ? 'clock-outline' : 'alert-circle-outline'}
+                name={lawyer.status === 'verified' ? 'check-decagram' : 'alert-circle-outline'}
                 size={11}
                 color={lawyer.status === 'verified' ? '#2ecc71' : '#b45309'}
               />
               <Text style={lawyer.status === 'verified' ? styles.verifiedText : styles.pendingText}>
-                {lawyer.status === 'verified' ? 'SCN Verified' : lawyer.status === 'pending' ? 'Verification pending' : 'Not verified'}
+                {lawyer.status === 'verified' ? 'SCN Verified' : 'Not verified'}
               </Text>
             </View>
           </View>
@@ -134,16 +134,14 @@ function LawyerModal({ lawyer, onClose, onBook }: {
 
             <View style={lawyer.status === 'verified' ? styles.verifiedRow : styles.pendingRow}>
               <MaterialCommunityIcons
-                name={lawyer.status === 'verified' ? 'check-decagram' : lawyer.status === 'pending' ? 'clock-outline' : 'alert-circle-outline'}
+                name={lawyer.status === 'verified' ? 'check-decagram' : 'alert-circle-outline'}
                 size={16}
                 color={lawyer.status === 'verified' ? '#2ecc71' : '#b45309'}
               />
               <Text style={lawyer.status === 'verified' ? styles.verifiedRowText : styles.pendingRowText}>
                 {lawyer.status === 'verified'
                   ? `Identity verified against Supreme Court enrolment (${lawyer.scn_number})`
-                  : lawyer.status === 'pending'
-                    ? 'This lawyer submitted verification documents and the application is under review.'
-                    : 'This lawyer account has not been verified by LegalBridge.'}
+                  : 'This lawyer account has not been verified by LegalBridge.'}
               </Text>
             </View>
 
