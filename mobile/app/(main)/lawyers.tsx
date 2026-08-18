@@ -49,12 +49,12 @@ function LawyerCard({ lawyer, rating, onView }: {
             <Text style={styles.lawyerName} numberOfLines={1}>{lawyer.full_name}</Text>
             <View style={lawyer.status === 'verified' ? styles.verifiedBadge : styles.pendingBadge}>
               <MaterialCommunityIcons
-                name={lawyer.status === 'verified' ? 'check-decagram' : 'clock-outline'}
+                name={lawyer.status === 'verified' ? 'check-decagram' : lawyer.status === 'pending' ? 'clock-outline' : 'alert-circle-outline'}
                 size={11}
                 color={lawyer.status === 'verified' ? '#2ecc71' : '#b45309'}
               />
               <Text style={lawyer.status === 'verified' ? styles.verifiedText : styles.pendingText}>
-                {lawyer.status === 'verified' ? 'SCN Verified' : 'Verification pending'}
+                {lawyer.status === 'verified' ? 'SCN Verified' : lawyer.status === 'pending' ? 'Verification pending' : 'Not verified'}
               </Text>
             </View>
           </View>
@@ -134,14 +134,16 @@ function LawyerModal({ lawyer, onClose, onBook }: {
 
             <View style={lawyer.status === 'verified' ? styles.verifiedRow : styles.pendingRow}>
               <MaterialCommunityIcons
-                name={lawyer.status === 'verified' ? 'check-decagram' : 'alert-circle-outline'}
+                name={lawyer.status === 'verified' ? 'check-decagram' : lawyer.status === 'pending' ? 'clock-outline' : 'alert-circle-outline'}
                 size={16}
                 color={lawyer.status === 'verified' ? '#2ecc71' : '#b45309'}
               />
               <Text style={lawyer.status === 'verified' ? styles.verifiedRowText : styles.pendingRowText}>
                 {lawyer.status === 'verified'
                   ? `Identity verified against Supreme Court enrolment (${lawyer.scn_number})`
-                  : 'This lawyer account has not yet completed LegalBridge SCN verification.'}
+                  : lawyer.status === 'pending'
+                    ? 'This lawyer submitted verification documents and the application is under review.'
+                    : 'This lawyer account has not been verified by LegalBridge.'}
               </Text>
             </View>
 
@@ -301,7 +303,7 @@ export default function LawyersScreen() {
 
   const states = new Set(lawyers.map((l) => l.state).filter(Boolean));
   const verifiedCount = lawyers.filter((l) => l.status === 'verified').length;
-  const pendingCount = lawyers.length - verifiedCount;
+  const unverifiedCount = lawyers.filter((l) => l.status === 'unverified' || l.status === 'rejected').length;
 
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
@@ -386,7 +388,7 @@ export default function LawyersScreen() {
           {[
             { num: String(lawyers.length), label: 'Lawyer Accounts' },
             { num: String(verifiedCount), label: 'SCN Verified' },
-            { num: String(pendingCount), label: 'Pending' },
+            { num: String(unverifiedCount), label: 'Not Verified' },
           ].map((s, i) => (
             <View key={s.label} style={[styles.stat, i < 2 && styles.statBorder]}>
               <Text style={styles.statNum}>{s.num}</Text>
