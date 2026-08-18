@@ -7,7 +7,7 @@ max_rows = 1000
 
 [db]
 port = 54322
-major_version = 15
+major_version = 17
 
 [auth]
 enabled = true
@@ -22,4 +22,7 @@ enabled = true
 enabled = false
 
 [functions.live]
+verify_jwt = false
+
+[functions.news-ingest]
 verify_jwt = false

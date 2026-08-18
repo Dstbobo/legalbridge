@@ -1,6 +1,12 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 const ANTHROPIC_KEY = Deno.env.get("ANTHROPIC_API_KEY")!;
+// Smart fallback chain (Claude → Gemini → Groq) so document drafting keeps
+// working through credit gaps while scaling.
+const GEMINI_KEY = Deno.env.get("GEMINI_API_KEY") ?? '';
+const GROQ_KEY = Deno.env.get("GROQ_API_KEY") ?? '';
+const GEMINI_FALLBACK_MODELS = ['gemini-flash-latest', 'gemini-3-flash-preview', 'gemini-2.0-flash'];
+const GROQ_FALLBACK_MODEL = 'llama-3.3-70b-versatile';
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
@@ -101,6 +107,19 @@ const CORS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
+
+// The legal document itself always stays in Nigerian legal English (for
+// validity), but when the user has chosen a Nigerian language we ask any
+// NEED_DETAILS clarifying questions in that language so the chat feels native.
+const LANG_NAMES: Record<string, string> = {
+  en: 'English', pcm: 'Nigerian Pidgin', yo: 'Yoruba', ha: 'Hausa', ig: 'Igbo',
+};
+function documentLanguageDirective(lang?: string): string {
+  const code = (lang || 'en').toLowerCase();
+  if (code === 'en' || !LANG_NAMES[code]) return '';
+  const name = LANG_NAMES[code];
+  return `\n\nLANGUAGE RULE:\n- The finished legal document MUST be written in standard Nigerian legal English — never translate the document itself, as that would harm its legal validity.\n- BUT if you need to ask NEED_DETAILS clarifying questions first, ask those questions in ${name} (warm and clear). The literal token "NEED_DETAILS:" must still appear in English as the very first characters, but the questions after it should be in ${name}.`;
+}
 
 // ── NIGERIAN DATE HELPER (server-side) ──
 function nigerianToday(): string {
@@ -293,7 +312,8 @@ serve(async (req) => {
       messages = [],
       userType = 'other',
       summary = '',
-      profile = {}
+      profile = {},
+      language = 'en',
     } = body;
 
     const lastMsg = messages[messages.length - 1]?.content || '';
@@ -383,6 +403,9 @@ NEVER wrap the document in markdown code fences (\`\`\`). Output the document di
       systemPrompt += `\n\n[CONVERSATION CONTEXT]\n${summary}\n[END CONTEXT]`;
     }
 
+    // Document stays English; clarifying questions go in the user's language.
+    systemPrompt += documentLanguageDirective(language);
+
     // ── DETERMINISTIC EXTRACTION HELPER ──
     // Extract candidate proper-noun names + key facts from the user message and
     // re-state them inside the system prompt as an explicit FACTS block. This
@@ -439,63 +462,129 @@ NEVER wrap the document in markdown code fences (\`\`\`). Output the document di
     const writer = writable.getWriter();
     const encoder = new TextEncoder();
 
+    const emit = (text: string) => writer.write(encoder.encode(`data: ${JSON.stringify({ text })}\n\n`));
+
+    // Pipe an SSE body, extracting text with `pick`; returns chars emitted.
+    async function pipeSSE(body: ReadableStream<Uint8Array>, pick: (j: any) => string): Promise<number> {
+      const reader = body.getReader();
+      const dec = new TextDecoder();
+      let buf = '';
+      let emitted = 0;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const lines = buf.split('\n');
+        buf = lines.pop() ?? '';
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const data = line.slice(6).trim();
+          if (data === '[DONE]') continue;
+          try {
+            const text = pick(JSON.parse(data)) || '';
+            if (text) { emitted += text.length; await emit(text); }
+          } catch { /* skip */ }
+        }
+      }
+      return emitted;
+    }
+
+    const mappedMessages = messages.map((m: any) => ({
+      role: m.role === 'assistant' ? 'assistant' : 'user',
+      content: m.content,
+    }));
+
+    async function tryClaude(): Promise<boolean> {
+      const res = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'x-api-key': ANTHROPIC_KEY,
+          'anthropic-version': '2023-06-01',
+          'content-type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-5',
+          // 8192 supports long bail applications, partnership agreements,
+          // full divorce petitions etc. without cut-off.
+          max_tokens: 8192,
+          // Low temperature so name/charge/court extraction is DETERMINISTIC.
+          temperature: 0.2,
+          stream: true,
+          system: systemPrompt,
+          messages: mappedMessages,
+        })
+      });
+      if (!res.ok) {
+        console.error('chat-documents: claude unavailable', res.status, (await res.text()).slice(0, 200));
+        return false;
+      }
+      await pipeSSE(res.body!, (j) => j.delta?.text || '');
+      return true;
+    }
+
+    async function tryGemini(): Promise<boolean> {
+      if (!GEMINI_KEY) return false;
+      const contents = mappedMessages.map((m: any) => ({
+        role: m.role === 'assistant' ? 'model' : 'user',
+        parts: [{ text: String(m.content ?? '') }],
+      }));
+      for (const model of GEMINI_FALLBACK_MODELS) {
+        try {
+          const res = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${GEMINI_KEY}`,
+            {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({
+                systemInstruction: { parts: [{ text: systemPrompt }] },
+                contents,
+                generationConfig: { maxOutputTokens: 8192, temperature: 0.2 },
+              }),
+            },
+          );
+          if (!res.ok) { console.error('chat-documents gemini', model, res.status); continue; }
+          const emitted = await pipeSSE(res.body!, (j) =>
+            (j?.candidates?.[0]?.content?.parts ?? []).map((p: any) => p?.text ?? '').join(''));
+          if (emitted > 0) return true;
+        } catch (e) { console.error('chat-documents gemini', model, String(e)); }
+      }
+      return false;
+    }
+
+    async function tryGroq(): Promise<boolean> {
+      if (!GROQ_KEY) return false;
+      try {
+        const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', Authorization: `Bearer ${GROQ_KEY}` },
+          body: JSON.stringify({
+            model: GROQ_FALLBACK_MODEL,
+            stream: true,
+            max_tokens: 8192,
+            temperature: 0.2,
+            messages: [
+              { role: 'system', content: systemPrompt },
+              ...mappedMessages.map((m: any) => ({ role: m.role, content: String(m.content ?? '') })),
+            ],
+          }),
+        });
+        if (!res.ok) { console.error('chat-documents groq', res.status, (await res.text()).slice(0, 200)); return false; }
+        const emitted = await pipeSSE(res.body!, (j) => j?.choices?.[0]?.delta?.content || '');
+        return emitted > 0;
+      } catch (e) { console.error('chat-documents groq', String(e)); return false; }
+    }
+
     (async () => {
       try {
-        const res = await fetch('https://api.anthropic.com/v1/messages', {
-          method: 'POST',
-          headers: {
-            'x-api-key': ANTHROPIC_KEY,
-            'anthropic-version': '2023-06-01',
-            'content-type': 'application/json'
-          },
-          body: JSON.stringify({
-            model: 'claude-sonnet-4-5',
-            // 8192 supports long bail applications, source protection declarations,
-            // partnership agreements, full divorce petitions etc. without cut-off.
-            // Tenancy agreements were fitting in 4096; longer docs were not.
-            max_tokens: 8192,
-            // Low temperature so name/charge/court extraction is DETERMINISTIC.
-            temperature: 0.2,
-            stream: true,
-            system: systemPrompt,
-            messages: messages.map((m: any) => ({
-              role: m.role === 'assistant' ? 'assistant' : 'user',
-              content: m.content
-            }))
-          })
-        });
-
-        if (!res.ok) {
-          const errText = await res.text();
-          throw new Error('Claude error: ' + res.status + ' — ' + errText.slice(0, 500));
-        }
-        const reader = res.body!.getReader();
-        const dec = new TextDecoder();
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          const chunk = dec.decode(value);
-          const lines = chunk.split('\n').filter(l => l.startsWith('data: '));
-          for (const line of lines) {
-            const data = line.slice(6);
-            if (data === '[DONE]') continue;
-            try {
-              const j = JSON.parse(data);
-              const text = j.delta?.text || '';
-              if (text) await writer.write(encoder.encode(`data: ${JSON.stringify({ text })}\n\n`));
-            } catch { /* skip */ }
-          }
-        }
+        // Cost-first: Groq leads (free tier), Gemini second, Claude last so
+        // credits are only spent when the free engines are down.
+        if (await tryGroq()) return;
+        if (await tryGemini()) return;
+        if (await tryClaude()) return;
+        await emit('Document service is temporarily unavailable. Please try again shortly.');
       } catch (e: any) {
-        const msg = e?.message || String(e);
-        console.error('chat-documents stream error:', msg);
-        // Surface billing problems clearly so the operator knows to top up,
-        // but show a clean message to end users for everything else.
-        const userFacing = /credit balance|billing|429|rate.limit/i.test(msg)
-          ? "Document service temporarily unavailable due to a billing issue. The operator has been notified — please try again shortly."
-          : "Document drafting failed. Please try again.";
-        await writer.write(encoder.encode(`data: ${JSON.stringify({ text: userFacing })}\n\n`));
+        console.error('chat-documents stream error:', e?.message || String(e));
+        await emit('Document drafting failed. Please try again.');
       } finally {
         await writer.write(encoder.encode('data: [DONE]\n\n'));
         await writer.close();

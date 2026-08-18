@@ -19,11 +19,16 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 const ANTHROPIC_KEY = Deno.env.get("ANTHROPIC_API_KEY")!;
+const GEMINI_KEY    = Deno.env.get("GEMINI_API_KEY") ?? '';
+const GROQ_KEY      = Deno.env.get("GROQ_API_KEY") ?? '';
 const SUPABASE_URL  = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_KEY  = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const SUPABASE_ANON = Deno.env.get("SUPABASE_ANON_KEY")!;
 
 const MODEL = 'claude-sonnet-4-5';
+// Fallbacks when Claude is unavailable (credits/rate limits) — users never see an outage.
+const GEMINI_FALLBACK_MODELS = ['gemini-flash-latest', 'gemini-3-flash-preview', 'gemini-2.0-flash'];
+const GROQ_FALLBACK_MODEL = 'llama-3.3-70b-versatile';
 
 // Internal hub URLs — chat-stream proxies to these for heavy work
 const FN_DOCUMENTS = `https://api.legalbridge.ng/v1/documents`;
@@ -34,6 +39,32 @@ const CORS = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
   "Access-Control-Expose-Headers": "X-Stream, X-Intent, Content-Type",
 };
+
+// ════════════════════════════════════════════════════════════════════
+// LANGUAGE — the user can choose to be answered in a Nigerian language.
+// The directive rides on the system prompt so every engine (Claude,
+// Gemini, Groq) honours it. Non-English languages prefer Gemini first,
+// since Google has the strongest African-language coverage.
+// ════════════════════════════════════════════════════════════════════
+const LANG_NAMES: Record<string, string> = {
+  en: 'English', pcm: 'Nigerian Pidgin', yo: 'Yoruba', ha: 'Hausa', ig: 'Igbo',
+};
+function languageDirective(lang?: string): string {
+  const code = (lang || 'en').toLowerCase();
+  if (code === 'en' || !LANG_NAMES[code]) return '';
+  const name = LANG_NAMES[code];
+  return `
+
+LANGUAGE RULE (CRITICAL — overrides tone notes above):
+- The user has chosen ${name}. Write your ENTIRE reply in ${name}, warm and natural, the way it is genuinely spoken in Nigeria.
+- Keep it clear and simple. Explain legal terms in ${name}; where a legal concept has no clean ${name} word, use the English term and explain it in ${name} in brackets.
+- Do NOT drift back into English unless the user writes to you in English. Never apologise for the language or mention translation.
+- Legal accuracy must NEVER be sacrificed for language — the legal meaning must stay exactly correct.`;
+}
+function prefersGemini(lang?: string): boolean {
+  const code = (lang || 'en').toLowerCase();
+  return code !== 'en' && !!LANG_NAMES[code];
+}
 
 // ════════════════════════════════════════════════════════════════════
 // IDENTITY + ROLE PERSONAS (preserved exactly from chat-conversational)
@@ -49,6 +80,14 @@ CRITICAL IDENTITY RULES — NEVER VIOLATE:
 - NEVER add casual sign-offs to formal documents. Documents must end professionally with the signature/jurat block only.
 - If asked what AI you use, say: "I use proprietary AI technology specifically designed for Nigerian legal practice."
 `;
+
+const ANSWER_COMPLETENESS = `
+
+ANSWER COMPLETENESS (VERY IMPORTANT — how every answer must feel):
+- When the user asks a legal question, give a COMPLETE, confident answer they can actually act on: explain the relevant law, their rights or position, and the practical steps — structured clearly with short headings or points where helpful.
+- Always finish with a clear BOTTOM LINE / conclusion — a short, direct summary of where they stand and what to do next. Never end in the middle of a discussion.
+- Do NOT reply with a short message whose main content is questions back to the user. You may ask AT MOST ONE brief clarifying question, and only AFTER you have already given real, useful guidance based on the most likely situation. If a detail is missing, make a sensible common-sense assumption, answer on that basis, and note the assumption — rather than withholding the answer.
+- Be genuinely helpful and thorough. A person should leave the message feeling they got a real answer, not an interview.`;
 
 const DOC_RULE = `
 
@@ -345,61 +384,139 @@ Now write ONLY the status line for the user's message:`;
 // ════════════════════════════════════════════════════════════════════
 // CLAUDE SONNET STREAMING for conversational + legal modes
 // ════════════════════════════════════════════════════════════════════
-function streamClaude(systemPrompt: string, messages: any[], intent: string): Response {
+function streamClaude(systemPrompt: string, messages: any[], intent: string, preferGemini = false): Response {
   const { readable, writable } = new TransformStream();
   const writer  = writable.getWriter();
   const encoder = new TextEncoder();
 
-  (async () => {
+  const emit = (text: string) => writer.write(encoder.encode(`data: ${JSON.stringify({ text })}\n\n`));
+
+  // Pipe an SSE body, extracting text with `pick`; returns chars emitted.
+  async function pipeSSE(body: ReadableStream<Uint8Array>, pick: (j: any) => string): Promise<number> {
+    const reader = body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    let emitted = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const lines = buf.split('\n');
+      buf = lines.pop() ?? '';
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const data = line.slice(6).trim();
+        if (data === '[DONE]') continue;
+        try {
+          const text = pick(JSON.parse(data)) || '';
+          if (text) { emitted += text.length; await emit(text); }
+        } catch { /* skip */ }
+      }
+    }
+    return emitted;
+  }
+
+  async function tryClaude(): Promise<boolean> {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': ANTHROPIC_KEY,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: MODEL,
+        max_tokens: intent === 'legal' ? 4096 : 3072,
+        stream: true,
+        system: systemPrompt,
+        messages: messages.map((m: any) => ({
+          role: m.role === 'assistant' ? 'assistant' : 'user',
+          content: m.content,
+        })),
+      }),
+    });
+    if (!res.ok) {
+      console.error('claude unavailable:', res.status, (await res.text()).slice(0, 200));
+      return false;
+    }
+    await pipeSSE(res.body!, (j) => j.delta?.text || '');
+    return true;
+  }
+
+  // Gemini fallback — same persona, streamed. Users notice nothing.
+  async function tryGemini(): Promise<boolean> {
+    if (!GEMINI_KEY) return false;
+    const contents = messages.map((m: any) => ({
+      role: m.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: String(m.content ?? '') }],
+    }));
+    for (const model of GEMINI_FALLBACK_MODELS) {
+      try {
+        const res = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${GEMINI_KEY}`,
+          {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              systemInstruction: { parts: [{ text: systemPrompt }] },
+              contents,
+              generationConfig: { maxOutputTokens: intent === 'legal' ? 4096 : 3072, temperature: 0.6 },
+            }),
+          },
+        );
+        if (!res.ok) { console.error('gemini', model, res.status); continue; }
+        const emitted = await pipeSSE(res.body!, (j) =>
+          (j?.candidates?.[0]?.content?.parts ?? []).map((p: any) => p?.text ?? '').join(''));
+        if (emitted > 0) return true;
+      } catch (e) { console.error('gemini', model, String(e)); }
+    }
+    return false;
+  }
+
+  // Groq fallback (OpenAI-compatible) — used only if a GROQ_API_KEY secret is set.
+  async function tryGroq(): Promise<boolean> {
+    if (!GROQ_KEY) return false;
     try {
-      const res = await fetch('https://api.anthropic.com/v1/messages', {
+      const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST',
-        headers: {
-          'x-api-key': ANTHROPIC_KEY,
-          'anthropic-version': '2023-06-01',
-          'content-type': 'application/json',
-        },
+        headers: { 'content-type': 'application/json', Authorization: `Bearer ${GROQ_KEY}` },
         body: JSON.stringify({
-          model: MODEL,
-          max_tokens: intent === 'legal' ? 4096 : 2048,
+          model: GROQ_FALLBACK_MODEL,
           stream: true,
-          system: systemPrompt,
-          messages: messages.map((m: any) => ({
-            role: m.role === 'assistant' ? 'assistant' : 'user',
-            content: m.content,
-          })),
+          max_tokens: intent === 'legal' ? 4096 : 3072,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            ...messages.map((m: any) => ({
+              role: m.role === 'assistant' ? 'assistant' : 'user',
+              content: String(m.content ?? ''),
+            })),
+          ],
         }),
       });
+      if (!res.ok) { console.error('groq', res.status, (await res.text()).slice(0, 200)); return false; }
+      const emitted = await pipeSSE(res.body!, (j) => j?.choices?.[0]?.delta?.content || '');
+      return emitted > 0;
+    } catch (e) { console.error('groq', String(e)); return false; }
+  }
 
-      if (!res.ok) {
-        const errText = await res.text();
-        throw new Error('Claude error: ' + res.status + ' — ' + errText.slice(0, 300));
+  (async () => {
+    try {
+      // Cost-first routing: Groq (generous free tier) leads for English so the
+      // app scales cheaply; Nigerian languages stay Gemini-first (Groq is weak
+      // there). Claude is the final safety net to preserve credits.
+      if (preferGemini) {
+        if (await tryGemini()) return;
+        if (await tryGroq()) return;
+        if (await tryClaude()) return;
+      } else {
+        if (await tryGroq()) return;
+        if (await tryGemini()) return;
+        if (await tryClaude()) return;
       }
-
-      const reader = res.body!.getReader();
-      const dec    = new TextDecoder();
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const chunk = dec.decode(value);
-        const lines = chunk.split('\n').filter((l) => l.startsWith('data: '));
-        for (const line of lines) {
-          const data = line.slice(6);
-          if (data === '[DONE]') continue;
-          try {
-            const j = JSON.parse(data);
-            const text = j.delta?.text || '';
-            if (text) await writer.write(encoder.encode(`data: ${JSON.stringify({ text })}\n\n`));
-          } catch { /* skip */ }
-        }
-      }
+      await emit('I am temporarily unavailable due to a service issue. The team has been notified — please try again shortly.');
     } catch (e: any) {
-      const msg = e?.message || String(e);
-      console.error('chat-stream error:', msg);
-      const userFacing = /credit balance|billing|429|rate.limit/i.test(msg)
-        ? 'I am temporarily unavailable due to a service issue. The team has been notified — please try again shortly.'
-        : "I encountered an error. Please try again.";
-      await writer.write(encoder.encode(`data: ${JSON.stringify({ text: userFacing })}\n\n`));
+      console.error('chat-stream error:', e?.message || String(e));
+      await emit('I encountered an error. Please try again.');
     } finally {
       await writer.write(encoder.encode('data: [DONE]\n\n'));
       await writer.close();
@@ -471,6 +588,8 @@ serve(async (req) => {
       // (e.g. parallel calls before chatId exists). For 'message' mode the
       // userType is always loaded from the profile.
       userType: bodyUserType = 'other',
+      // User's chosen answer language ('en' default, or pcm/yo/ha/ig).
+      language = 'en',
     } = body;
 
     // ─── AUTH — resolve user from JWT ─────────────────────────────────
@@ -551,6 +670,7 @@ serve(async (req) => {
       summary,
       messageCount: messageCount + 1,
       chatId,
+      language,
     };
 
     // ─── DOCUMENT GENERATION → proxy chat-documents ─────────────────
@@ -574,10 +694,11 @@ serve(async (req) => {
       if (profile?.specializations?.length) personaExtras += `\nSpecializations: ${profile.specializations.join(', ')}`;
     }
     const basePersona = PERSONAS[userType] || PERSONAS.other;
-    let systemPrompt = basePersona + personaExtras;
+    let systemPrompt = basePersona + ANSWER_COMPLETENESS + personaExtras;
     if (summary) systemPrompt += `\n\n[CONVERSATION CONTEXT]\n${summary}\n[END CONTEXT]`;
+    systemPrompt += languageDirective(language);
 
-    return streamClaude(systemPrompt, currentMessages, intent);
+    return streamClaude(systemPrompt, currentMessages, intent, prefersGemini(language));
 
   } catch (err: any) {
     return new Response(

@@ -22,10 +22,176 @@ const SUPABASE_KEY  = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
 const MODEL = 'claude-sonnet-4-5';
 
+// Smart fallback chain (Claude → Gemini → Groq) so tools keep working
+// through credit gaps while scaling. Gemini also covers images/PDFs.
+const GEMINI_KEY = Deno.env.get("GEMINI_API_KEY") ?? '';
+const GROQ_KEY = Deno.env.get("GROQ_API_KEY") ?? '';
+const GEMINI_FALLBACK_MODELS = ['gemini-flash-latest', 'gemini-3-flash-preview', 'gemini-2.0-flash'];
+const GROQ_FALLBACK_MODEL = 'llama-3.3-70b-versatile';
+
 const CORS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
+
+// ════════════════════════════════════════════════════════════════════
+// SHARED STREAMING WITH FALLBACK
+// Accepts Claude-format messages (string content or content blocks) and
+// streams via Claude → Gemini → Groq, emitting the same SSE the app expects.
+// ════════════════════════════════════════════════════════════════════
+function streamLLM(opts: {
+  system: string;
+  claudeMessages: any[];
+  maxTokens: number;
+  source: string;
+  claudeTools?: any[];
+  /** Use Gemini's Google Search grounding when falling back (for the search tool). */
+  searchGrounding?: boolean;
+  fallbackText: string;
+}): Response {
+  const { readable, writable } = new TransformStream();
+  const writer = writable.getWriter();
+  const encoder = new TextEncoder();
+  const emit = (text: string) => writer.write(encoder.encode(`data: ${JSON.stringify({ text })}\n\n`));
+
+  async function pipeSSE(body: ReadableStream<Uint8Array>, pick: (j: any) => string): Promise<number> {
+    const reader = body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    let emitted = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const lines = buf.split('\n');
+      buf = lines.pop() ?? '';
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const data = line.slice(6).trim();
+        if (data === '[DONE]') continue;
+        try {
+          const text = pick(JSON.parse(data)) || '';
+          if (text) { emitted += text.length; await emit(text); }
+        } catch { /* skip */ }
+      }
+    }
+    return emitted;
+  }
+
+  async function tryClaude(): Promise<boolean> {
+    const body: any = {
+      model: MODEL,
+      max_tokens: opts.maxTokens,
+      stream: true,
+      system: opts.system,
+      messages: opts.claudeMessages,
+    };
+    if (opts.claudeTools) body.tools = opts.claudeTools;
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': ANTHROPIC_KEY,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      console.error(`chat-tools ${opts.source}: claude unavailable`, res.status, (await res.text()).slice(0, 200));
+      return false;
+    }
+    await pipeSSE(res.body!, (j) =>
+      (j.delta?.type !== 'input_json_delta' ? j.delta?.text || '' : ''));
+    return true;
+  }
+
+  // Convert Claude message content (string or blocks) to Gemini parts.
+  function toGeminiParts(content: any): any[] {
+    if (typeof content === 'string') return [{ text: content }];
+    const parts: any[] = [];
+    for (const block of content ?? []) {
+      if (block.type === 'text') parts.push({ text: block.text });
+      else if ((block.type === 'image' || block.type === 'document') && block.source?.data) {
+        parts.push({ inlineData: { mimeType: block.source.media_type || 'image/jpeg', data: block.source.data } });
+      }
+    }
+    return parts;
+  }
+
+  async function tryGemini(): Promise<boolean> {
+    if (!GEMINI_KEY) return false;
+    const contents = opts.claudeMessages.map((m: any) => ({
+      role: m.role === 'assistant' ? 'model' : 'user',
+      parts: toGeminiParts(m.content),
+    }));
+    const gBody: any = {
+      systemInstruction: { parts: [{ text: opts.system }] },
+      contents,
+      generationConfig: { maxOutputTokens: opts.maxTokens, temperature: 0.4 },
+    };
+    if (opts.searchGrounding) gBody.tools = [{ google_search: {} }];
+    for (const model of GEMINI_FALLBACK_MODELS) {
+      try {
+        const res = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${GEMINI_KEY}`,
+          { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(gBody) },
+        );
+        if (!res.ok) { console.error(`chat-tools ${opts.source} gemini`, model, res.status); continue; }
+        const emitted = await pipeSSE(res.body!, (j) =>
+          (j?.candidates?.[0]?.content?.parts ?? []).map((p: any) => p?.text ?? '').join(''));
+        if (emitted > 0) return true;
+      } catch (e) { console.error(`chat-tools ${opts.source} gemini`, model, String(e)); }
+    }
+    return false;
+  }
+
+  async function tryGroq(): Promise<boolean> {
+    if (!GROQ_KEY) return false;
+    // Groq is text-only — skip when any message carries image/document blocks.
+    const textOnly = opts.claudeMessages.every((m: any) => typeof m.content === 'string');
+    if (!textOnly) return false;
+    try {
+      const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', Authorization: `Bearer ${GROQ_KEY}` },
+        body: JSON.stringify({
+          model: GROQ_FALLBACK_MODEL,
+          stream: true,
+          max_tokens: Math.min(opts.maxTokens, 8192),
+          messages: [
+            { role: 'system', content: opts.system },
+            ...opts.claudeMessages.map((m: any) => ({
+              role: m.role === 'assistant' ? 'assistant' : 'user',
+              content: String(m.content ?? ''),
+            })),
+          ],
+        }),
+      });
+      if (!res.ok) { console.error(`chat-tools ${opts.source} groq`, res.status); return false; }
+      const emitted = await pipeSSE(res.body!, (j) => j?.choices?.[0]?.delta?.content || '');
+      return emitted > 0;
+    } catch (e) { console.error(`chat-tools ${opts.source} groq`, String(e)); return false; }
+  }
+
+  (async () => {
+    try {
+      if (await tryClaude()) return;
+      if (await tryGemini()) return;
+      if (await tryGroq()) return;
+      await emit(opts.fallbackText);
+    } catch (e: any) {
+      console.error(`chat-tools ${opts.source} error:`, e?.message || String(e));
+      await emit(opts.fallbackText);
+    } finally {
+      await writer.write(encoder.encode('data: [DONE]\n\n'));
+      await writer.close();
+    }
+  })();
+
+  return new Response(readable, {
+    headers: { ...CORS, 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive', 'X-Stream': '1', 'X-Source': opts.source },
+  });
+}
 
 // ════════════════════════════════════════════════════════════════════
 // VOYAGE AI RAG — Nigerian legal authorities (UNTOUCHED)
@@ -313,71 +479,17 @@ FORMAT YOUR ANALYSIS IN PLAIN ENGLISH:
 // TOOL: search — Claude Sonnet with Anthropic web_search tool
 // ════════════════════════════════════════════════════════════════════
 function handleSearch(systemPrompt: string, messages: any[]): Response {
-  const { readable, writable } = new TransformStream();
-  const writer = writable.getWriter();
-  const encoder = new TextEncoder();
-
-  (async () => {
-    try {
-      const res = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'x-api-key': ANTHROPIC_KEY,
-          'anthropic-version': '2023-06-01',
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: MODEL,
-          max_tokens: 3000,
-          stream: true,
-          system: systemPrompt,
-          tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 5 }],
-          messages: messages.map((m: any) => ({
-            role: m.role === 'assistant' ? 'assistant' : 'user',
-            content: m.content,
-          })),
-        }),
-      });
-
-      if (!res.ok) {
-        const errText = await res.text();
-        throw new Error('Claude web search error: ' + res.status + ' — ' + errText.slice(0, 300));
-      }
-
-      const reader = res.body!.getReader();
-      const dec = new TextDecoder();
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const chunk = dec.decode(value);
-        const lines = chunk.split('\n').filter((l) => l.startsWith('data: '));
-        for (const line of lines) {
-          const data = line.slice(6);
-          if (data === '[DONE]') continue;
-          try {
-            const j = JSON.parse(data);
-            const text = j.delta?.text || '';
-            if (text && j.delta?.type !== 'input_json_delta') {
-              await writer.write(encoder.encode(`data: ${JSON.stringify({ text })}\n\n`));
-            }
-          } catch { /* skip */ }
-        }
-      }
-    } catch (e: any) {
-      const msg = e?.message || String(e);
-      console.error('chat-tools search error:', msg);
-      const userFacing = /credit balance|billing|429|rate.limit/i.test(msg)
-        ? '⚠ Search service temporarily unavailable due to a billing issue.'
-        : '⚠ Search is temporarily unavailable. Please try again.';
-      await writer.write(encoder.encode(`data: ${JSON.stringify({ text: userFacing })}\n\n`));
-    } finally {
-      await writer.write(encoder.encode('data: [DONE]\n\n'));
-      await writer.close();
-    }
-  })();
-
-  return new Response(readable, {
-    headers: { ...CORS, 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive', 'X-Stream': '1', 'X-Source': 'search' },
+  return streamLLM({
+    system: systemPrompt,
+    claudeMessages: messages.map((m: any) => ({
+      role: m.role === 'assistant' ? 'assistant' : 'user',
+      content: m.content,
+    })),
+    maxTokens: 3000,
+    source: 'search',
+    claudeTools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 5 }],
+    searchGrounding: true, // Gemini fallback searches with Google grounding
+    fallbackText: '⚠ Search is temporarily unavailable. Please try again.',
   });
 }
 
@@ -413,57 +525,12 @@ function handleVision(systemPrompt: string, images: any[], userText: string, doc
     text: userText || 'Conduct a full legal analysis of this document under Nigerian law. Identify the document type, extract all text, and assess its legal validity.',
   });
 
-  const { readable, writable } = new TransformStream();
-  const writer = writable.getWriter();
-  const encoder = new TextEncoder();
-
-  (async () => {
-    try {
-      const res = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'x-api-key': ANTHROPIC_KEY,
-          'anthropic-version': '2023-06-01',
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: MODEL,
-          max_tokens: 4096,
-          stream: true,
-          system: systemPrompt,
-          messages: [{ role: 'user', content: claudeContent }],
-        }),
-      });
-
-      if (!res.ok) throw new Error('Claude vision error: ' + res.status);
-      const reader = res.body!.getReader();
-      const dec = new TextDecoder();
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const chunk = dec.decode(value);
-        const lines = chunk.split('\n').filter((l) => l.startsWith('data: '));
-        for (const line of lines) {
-          const data = line.slice(6);
-          if (data === '[DONE]') continue;
-          try {
-            const j = JSON.parse(data);
-            const text = j.delta?.text || '';
-            if (text) await writer.write(encoder.encode(`data: ${JSON.stringify({ text })}\n\n`));
-          } catch { /* skip */ }
-        }
-      }
-    } catch (e: any) {
-      console.error('chat-tools vision error:', e?.message || e);
-      await writer.write(encoder.encode(`data: ${JSON.stringify({ text: '⚠ Document analysis failed. Please ensure the image is clear and try again.' })}\n\n`));
-    } finally {
-      await writer.write(encoder.encode('data: [DONE]\n\n'));
-      await writer.close();
-    }
-  })();
-
-  return new Response(readable, {
-    headers: { ...CORS, 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive', 'X-Stream': '1', 'X-Source': 'vision' },
+  return streamLLM({
+    system: systemPrompt,
+    claudeMessages: [{ role: 'user', content: claudeContent }],
+    maxTokens: 4096,
+    source: 'vision',
+    fallbackText: '⚠ Document analysis failed. Please ensure the image is clear and try again.',
   });
 }
 
@@ -500,110 +567,25 @@ async function handleEvidence(systemPrompt: string, images: any[], userText: str
       text: userText || 'Conduct a full evidence analysis of this exhibit under Nigerian law.',
     });
 
-    const { readable, writable } = new TransformStream();
-    const writer = writable.getWriter();
-    const encoder = new TextEncoder();
-    (async () => {
-      try {
-        const res = await fetch('https://api.anthropic.com/v1/messages', {
-          method: 'POST',
-          headers: {
-            'x-api-key': ANTHROPIC_KEY,
-            'anthropic-version': '2023-06-01',
-            'content-type': 'application/json',
-          },
-          body: JSON.stringify({
-            model: MODEL,
-            max_tokens: 6000,
-            stream: true,
-            system: fullSystem,
-            messages: [{ role: 'user', content: claudeContent }],
-          }),
-        });
-        if (!res.ok) throw new Error('Claude evidence vision error: ' + res.status);
-        const reader = res.body!.getReader();
-        const dec = new TextDecoder();
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          const chunk = dec.decode(value);
-          const lines = chunk.split('\n').filter((l) => l.startsWith('data: '));
-          for (const line of lines) {
-            const data = line.slice(6);
-            if (data === '[DONE]') continue;
-            try {
-              const j = JSON.parse(data);
-              const text = j.delta?.text || '';
-              if (text) await writer.write(encoder.encode(`data: ${JSON.stringify({ text })}\n\n`));
-            } catch { /* skip */ }
-          }
-        }
-      } catch (e: any) {
-        console.error('chat-tools evidence vision error:', e?.message || e);
-        await writer.write(encoder.encode(`data: ${JSON.stringify({ text: 'Evidence analysis failed. Please try again.' })}\n\n`));
-      } finally {
-        await writer.write(encoder.encode('data: [DONE]\n\n'));
-        await writer.close();
-      }
-    })();
-    return new Response(readable, {
-      headers: { ...CORS, 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive', 'X-Stream': '1', 'X-Source': 'evidence' },
+    return streamLLM({
+      system: fullSystem,
+      claudeMessages: [{ role: 'user', content: claudeContent }],
+      maxTokens: 6000,
+      source: 'evidence',
+      fallbackText: 'Evidence analysis failed. Please try again.',
     });
   }
 
   // Text-only evidence analysis
-  const { readable, writable } = new TransformStream();
-  const writer = writable.getWriter();
-  const encoder = new TextEncoder();
-  (async () => {
-    try {
-      const res = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'x-api-key': ANTHROPIC_KEY,
-          'anthropic-version': '2023-06-01',
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: MODEL,
-          max_tokens: 6000,
-          stream: true,
-          system: fullSystem,
-          messages: messages.map((m: any) => ({
-            role: m.role === 'assistant' ? 'assistant' : 'user',
-            content: m.content,
-          })),
-        }),
-      });
-      if (!res.ok) throw new Error('Claude evidence error: ' + res.status);
-      const reader = res.body!.getReader();
-      const dec = new TextDecoder();
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const chunk = dec.decode(value);
-        const lines = chunk.split('\n').filter((l) => l.startsWith('data: '));
-        for (const line of lines) {
-          const data = line.slice(6);
-          if (data === '[DONE]') continue;
-          try {
-            const j = JSON.parse(data);
-            const text = j.delta?.text || '';
-            if (text) await writer.write(encoder.encode(`data: ${JSON.stringify({ text })}\n\n`));
-          } catch { /* skip */ }
-        }
-      }
-    } catch (e: any) {
-      console.error('chat-tools evidence text error:', e?.message || e);
-      await writer.write(encoder.encode(`data: ${JSON.stringify({ text: 'Evidence analysis failed. Please try again.' })}\n\n`));
-    } finally {
-      await writer.write(encoder.encode('data: [DONE]\n\n'));
-      await writer.close();
-    }
-  })();
-
-  return new Response(readable, {
-    headers: { ...CORS, 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive', 'X-Stream': '1', 'X-Source': 'evidence' },
+  return streamLLM({
+    system: fullSystem,
+    claudeMessages: messages.map((m: any) => ({
+      role: m.role === 'assistant' ? 'assistant' : 'user',
+      content: m.content,
+    })),
+    maxTokens: 6000,
+    source: 'evidence',
+    fallbackText: 'Evidence analysis failed. Please try again.',
   });
 }
 
@@ -623,6 +605,7 @@ serve(async (req) => {
       userType  = 'other',
       profile   = {},
       summary   = '',
+      language  = 'en',
     } = body;
 
     const lastMsg = messages[messages.length - 1]?.content || '';
@@ -636,8 +619,17 @@ serve(async (req) => {
     }
     const summaryCtx = summary ? `\n\n[CONVERSATION CONTEXT]\n${summary}\n[END CONTEXT]` : '';
 
+    // When the user chose a Nigerian language, explain everything in it.
+    const LANG_NAMES: Record<string, string> = {
+      en: 'English', pcm: 'Nigerian Pidgin', yo: 'Yoruba', ha: 'Hausa', ig: 'Igbo',
+    };
+    const langCode = String(language || 'en').toLowerCase();
+    const langCtx = (langCode !== 'en' && LANG_NAMES[langCode])
+      ? `\n\nLANGUAGE RULE (CRITICAL): Write your ENTIRE response in ${LANG_NAMES[langCode]}, clear and natural as spoken in Nigeria. Where a legal term has no clean ${LANG_NAMES[langCode]} word, keep the English term and explain it in brackets. Never sacrifice legal accuracy for language.`
+      : '';
+
     if (tool === 'vision') {
-      const systemPrompt = buildVisionPrompt(userType, profile) + stateExtras + summaryCtx;
+      const systemPrompt = buildVisionPrompt(userType, profile) + stateExtras + summaryCtx + langCtx;
       if ((!images || images.length === 0) && (!documents || documents.length === 0)) {
         return new Response(
           JSON.stringify({ error: 'No images or documents provided for vision tool' }),
@@ -648,12 +640,12 @@ serve(async (req) => {
     }
 
     if (tool === 'evidence') {
-      const systemPrompt = buildEvidencePrompt(userType) + stateExtras + summaryCtx;
+      const systemPrompt = buildEvidencePrompt(userType) + stateExtras + summaryCtx + langCtx;
       return await handleEvidence(systemPrompt, images, lastMsg, messages);
     }
 
     // Default: search
-    const systemPrompt = buildSearchPrompt(userType, profile) + stateExtras + summaryCtx;
+    const systemPrompt = buildSearchPrompt(userType, profile) + stateExtras + summaryCtx + langCtx;
     return handleSearch(systemPrompt, messages);
 
   } catch (err: any) {
