@@ -15,8 +15,9 @@ Usage in a route:
     async def me(user: AuthenticatedUser = Depends(require_user)):
         return {"id": user.id, "email": user.email}
 
-For routes that should work either authenticated or anonymously, use
-`optional_user` instead.
+For routes that genuinely support anonymous callers, use `optional_user`.
+When a caller supplies a token, `optional_user` still validates it and rejects
+invalid credentials instead of silently downgrading the request to anonymous.
 """
 from __future__ import annotations
 
@@ -73,10 +74,10 @@ def _decode_token(token: str, settings: Settings) -> Dict[str, Any]:
             detail="Authentication token audience is invalid",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    except jwt.InvalidTokenError as exc:
+    except jwt.InvalidTokenError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Invalid authentication token: {exc}",
+            detail="Invalid authentication token",
             headers={"WWW-Authenticate": "Bearer"},
         )
     return claims
@@ -90,10 +91,17 @@ def _claims_to_user(claims: Dict[str, Any]) -> AuthenticatedUser:
             detail="Authentication token has no subject",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    role = str(claims.get("role", ""))
+    if role != "authenticated":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication token is not an end-user session",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     return AuthenticatedUser(
         id=str(sub),
         email=claims.get("email"),
-        role=str(claims.get("role", "")),
+        role=role,
         aud=str(claims.get("aud", "")),
         raw_claims=claims,
     )
@@ -123,27 +131,14 @@ async def optional_user(
     settings: Settings = Depends(get_settings),
 ) -> Optional[AuthenticatedUser]:
     """
-    Truly lenient dependency: returns the user if a token is present and
-    valid; returns None in ALL other cases — missing token, invalid token,
-    wrong algorithm, wrong audience, expired, anything.
-
-    Why fully silent: /v1/documents is proxied by the chat-stream Edge
-    Function which has already verified the user's JWT. The token
-    chat-stream forwards may use a different algorithm or audience claim
-    than our FastAPI PyJWT settings expect (e.g. Supabase anon key vs a
-    real user access token). We must never let an auth decode failure
-    turn into a 401 that breaks document generation for the end user.
+    Optional identity dependency. A genuinely absent bearer token returns
+    None, while any supplied token must pass the same signature, expiry,
+    audience, subject, and role checks as `require_user`.
     """
     if creds is None or not creds.credentials:
         return None
-    try:
-        claims = _decode_token(creds.credentials, settings)
-        return _claims_to_user(claims)
-    except Exception:
-        # Any verification failure — wrong alg, bad audience, expired,
-        # malformed, etc. — is treated as anonymous. The document endpoint
-        # does not require authentication; chat-stream is the auth gate.
-        return None
+    claims = _decode_token(creds.credentials, settings)
+    return _claims_to_user(claims)
 
 
 # ── Convenience for non-route code paths (e.g. middleware) ──────────────

@@ -91,7 +91,9 @@ async def me(user: AuthenticatedUser = Depends(require_user)):
     return {"id": user.id, "email": user.email, "role": user.role}
 ```
 
-For routes that should accept anonymous traffic, swap to `optional_user`.
+For routes that genuinely accept anonymous traffic, use `optional_user`.
+Supplied credentials are always validated; an invalid token is never treated
+as an anonymous request. Provider-backed routes must use `require_user`.
 
 ---
 

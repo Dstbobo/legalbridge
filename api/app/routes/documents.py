@@ -7,7 +7,7 @@ system-prompt construction. The frontend can move one URL at a time.
 
 Request:
     POST /v1/documents
-    Authorization: Bearer <supabase-jwt>            (optional in Phase 1)
+    Authorization: Bearer <verified-supabase-user-jwt>
     Content-Type: application/json
     {
         "messages": [{"role": "user", "content": "..."}, ...],
@@ -38,7 +38,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from ..auth import AuthenticatedUser, optional_user
+from ..auth import AuthenticatedUser, require_user
 from ..config import Settings, get_settings
 from ..database import engine
 from ..services import anthropic_client
@@ -290,16 +290,14 @@ async def _generate_sse(
 async def generate_document(
     payload: DocumentRequest,
     request: Request,
-    user: Optional[AuthenticatedUser] = Depends(optional_user),
+    user: AuthenticatedUser = Depends(require_user),
     settings: Settings = Depends(get_settings),
 ) -> StreamingResponse:
     """
     Streaming document drafter. See module docstring for the full contract.
 
-    Auth: `optional_user` — matches the Edge Function which accepts anonymous
-    traffic (Supabase function auth gates it via the function URL secret, not
-    a per-user check). We still verify JWTs when one is supplied, so we can
-    attribute usage in logs.
+    Auth is mandatory because every successful request can spend provider
+    credits. The user identifier is taken only from the verified JWT.
     """
     messages_dicts: List[Dict[str, Any]] = [m.model_dump() for m in payload.messages]
     last_msg = messages_dicts[-1]["content"] if messages_dicts else ""
@@ -319,7 +317,7 @@ async def generate_document(
 
     logger.info(
         "documents.generate user=%s doc_type=%s template=%s msg_chars=%d",
-        (user.id if user else "anon"),
+        user.id,
         doc_type,
         (stored.document_type if stored else "none"),
         len(last_msg),

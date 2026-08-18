@@ -10,8 +10,11 @@ from __future__ import annotations
 
 import os
 import sys
+import time
+import uuid
 from pathlib import Path
 
+import jwt
 import pytest
 
 # Make `api/app/...` importable when pytest is run from anywhere.
@@ -46,3 +49,22 @@ def settings():
     """Fresh Settings instance for tests that want to override env."""
     from app.config import Settings  # noqa: WPS433 — late import after env is set
     return Settings()  # type: ignore[call-arg]
+
+
+@pytest.fixture
+def auth_headers() -> dict[str, str]:
+    """A short-lived, correctly signed Supabase end-user access token."""
+    now = int(time.time())
+    token = jwt.encode(
+        {
+            "sub": str(uuid.uuid4()),
+            "email": "buyer-readiness@example.test",
+            "role": "authenticated",
+            "aud": "authenticated",
+            "iat": now,
+            "exp": now + 300,
+        },
+        _DEFAULT_TEST_ENV["SUPABASE_JWT_SECRET"],
+        algorithm="HS256",
+    )
+    return {"Authorization": f"Bearer {token}"}

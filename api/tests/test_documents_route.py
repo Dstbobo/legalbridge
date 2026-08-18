@@ -66,7 +66,7 @@ def test_health_still_works(client):
 
 
 @respx.mock
-def test_generate_document_streams_sse(client):
+def test_generate_document_streams_sse(client, auth_headers):
     deltas = ["# AFFIDAVIT\n\n", "I, JOHN DOE, ", "make oath and say:"]
     respx.post("https://api.anthropic.com/v1/messages").mock(
         return_value=httpx.Response(
@@ -83,7 +83,7 @@ def test_generate_document_streams_sse(client):
         "profile": {"state": "Lagos"},
     }
 
-    with client.stream("POST", "/v1/documents", json=payload) as resp:
+    with client.stream("POST", "/v1/documents", json=payload, headers=auth_headers) as resp:
         assert resp.status_code == 200
         assert resp.headers["x-stream"] == "1"
         assert resp.headers["x-source"] == "documents"
@@ -98,7 +98,7 @@ def test_generate_document_streams_sse(client):
 
 
 @respx.mock
-def test_anthropic_error_surfaces_user_friendly_message(client):
+def test_anthropic_error_surfaces_user_friendly_message(client, auth_headers):
     respx.post("https://api.anthropic.com/v1/messages").mock(
         return_value=httpx.Response(429, text="rate limit exceeded")
     )
@@ -110,7 +110,7 @@ def test_anthropic_error_surfaces_user_friendly_message(client):
         "profile": {},
     }
 
-    with client.stream("POST", "/v1/documents", json=payload) as resp:
+    with client.stream("POST", "/v1/documents", json=payload, headers=auth_headers) as resp:
         assert resp.status_code == 200
         body = b"".join(resp.iter_bytes()).decode("utf-8")
 
@@ -119,7 +119,7 @@ def test_anthropic_error_surfaces_user_friendly_message(client):
 
 
 @respx.mock
-def test_anthropic_generic_error(client):
+def test_anthropic_generic_error(client, auth_headers):
     respx.post("https://api.anthropic.com/v1/messages").mock(
         return_value=httpx.Response(500, text="internal server error")
     )
@@ -129,13 +129,13 @@ def test_anthropic_generic_error(client):
         "summary": "",
         "profile": {},
     }
-    with client.stream("POST", "/v1/documents", json=payload) as resp:
+    with client.stream("POST", "/v1/documents", json=payload, headers=auth_headers) as resp:
         body = b"".join(resp.iter_bytes()).decode("utf-8")
     assert "Document drafting failed" in body
     assert "data: [DONE]" in body
 
 
-def test_empty_messages_does_not_crash(client, monkeypatch):
+def test_empty_messages_does_not_crash(client, monkeypatch, auth_headers):
     # No messages → no template lookup, route should still serialise a system
     # prompt and attempt to call Anthropic. We mock that out to avoid network.
     from app.services import anthropic_client
@@ -146,7 +146,52 @@ def test_empty_messages_does_not_crash(client, monkeypatch):
 
     monkeypatch.setattr(anthropic_client, "stream_text_deltas", _fake_stream)
 
-    with client.stream("POST", "/v1/documents", json={"messages": []}) as resp:
+    with client.stream("POST", "/v1/documents", json={"messages": []}, headers=auth_headers) as resp:
         assert resp.status_code == 200
         body = b"".join(resp.iter_bytes()).decode("utf-8")
     assert body.strip().endswith("[DONE]")
+
+
+def test_anonymous_paid_document_request_is_rejected(client):
+    response = client.post(
+        "/v1/documents",
+        json={"messages": [{"role": "user", "content": "Draft an agreement"}]},
+    )
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Missing or malformed Authorization header"
+
+
+def test_invalid_jwt_is_rejected_before_provider_call(client):
+    response = client.post(
+        "/v1/documents",
+        headers={"Authorization": "Bearer not-a-jwt"},
+        json={"messages": [{"role": "user", "content": "Draft an agreement"}]},
+    )
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid authentication token"
+
+
+def test_service_role_token_is_not_accepted_as_end_user(client, settings):
+    import time
+
+    import jwt
+
+    now = int(time.time())
+    token = jwt.encode(
+        {
+            "sub": "00000000-0000-0000-0000-000000000001",
+            "role": "service_role",
+            "aud": "authenticated",
+            "iat": now,
+            "exp": now + 300,
+        },
+        settings.SUPABASE_JWT_SECRET,
+        algorithm="HS256",
+    )
+    response = client.post(
+        "/v1/documents",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"messages": [{"role": "user", "content": "Draft an agreement"}]},
+    )
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Authentication token is not an end-user session"
