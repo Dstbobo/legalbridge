@@ -6,8 +6,24 @@ language plpgsql
 set search_path = public, pg_temp
 as $$
 begin
-  if new.client_id is distinct from old.client_id
-     or new.lawyer_id is distinct from old.lawyer_id then
+  if tg_op = 'INSERT' then
+    new.client_id := coalesce(new.client_id, new.user_a);
+    new.lawyer_id := coalesce(new.lawyer_id, new.user_b);
+    new.user_a := coalesce(new.user_a, new.client_id);
+    new.user_b := coalesce(new.user_b, new.lawyer_id);
+
+    if new.client_id is null
+       or new.lawyer_id is null
+       or new.user_a is distinct from new.client_id
+       or new.user_b is distinct from new.lawyer_id
+       or new.client_id = new.lawyer_id then
+      raise exception 'conversation participants are invalid'
+        using errcode = '42501';
+    end if;
+  elsif new.client_id is distinct from old.client_id
+     or new.lawyer_id is distinct from old.lawyer_id
+     or new.user_a is distinct from old.user_a
+     or new.user_b is distinct from old.user_b then
     raise exception 'conversation participants cannot be reassigned'
       using errcode = '42501';
   end if;
@@ -24,7 +40,7 @@ $$;
 drop trigger if exists enforce_conversation_participant_boundary
   on public.conversations;
 create trigger enforce_conversation_participant_boundary
-  before update on public.conversations
+  before insert or update on public.conversations
   for each row execute function public.enforce_conversation_participant_boundary();
 
 drop policy if exists "client starts conversation" on public.conversations;

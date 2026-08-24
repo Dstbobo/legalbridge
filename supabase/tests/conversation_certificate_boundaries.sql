@@ -1,5 +1,5 @@
 begin;
-select plan(17);
+select plan(25);
 
 insert into auth.users (
   id, instance_id, aud, role, email, encrypted_password,
@@ -19,6 +19,18 @@ select lives_ok(
             '10000000-0000-0000-0000-000000000001',
             '20000000-0000-0000-0000-000000000002')$$,
   'client can start a conversation with a different lawyer'
+);
+select is(
+  (select user_a from public.conversations
+    where id = '40000000-0000-0000-0000-000000000004'),
+  '10000000-0000-0000-0000-000000000001'::uuid,
+  'mobile participant insert also populates the legacy client field'
+);
+select is(
+  (select user_b from public.conversations
+    where id = '40000000-0000-0000-0000-000000000004'),
+  '20000000-0000-0000-0000-000000000002'::uuid,
+  'mobile participant insert also populates the legacy lawyer field'
 );
 select throws_ok(
   $$insert into public.conversations (client_id, lawyer_id)
@@ -111,6 +123,44 @@ select throws_ok(
     values ('30000000-0000-0000-0000-000000000003', 'Outsider', 'SCN-TEST-3',
             '20000000-0000-0000-0000-000000000002/certificate.jpg', 'pending')$$,
   '42501', null, 'lawyer cannot bind another users certificate path'
+);
+
+select set_config('request.jwt.claim.sub', '10000000-0000-0000-0000-000000000001', true);
+select lives_ok(
+  $$insert into public.profiles (id, full_name, user_type)
+    values ('10000000-0000-0000-0000-000000000001', 'Test Client', 'individual')$$,
+  'user can create a least-privileged profile'
+);
+select throws_ok(
+  $$update public.profiles set plan = 'premium'
+    where id = '10000000-0000-0000-0000-000000000001'$$,
+  '42501', 'profile plan requires server authorization',
+  'self-service plan escalation is rejected'
+);
+select throws_ok(
+  $$update public.profiles set user_type = 'lawyer'
+    where id = '10000000-0000-0000-0000-000000000001'$$,
+  '42501', 'profile role cannot be reassigned',
+  'self-service role reassignment is rejected'
+);
+select throws_ok(
+  $$update public.profiles set verification_status = 'verified'
+    where id = '10000000-0000-0000-0000-000000000001'$$,
+  '42501', 'verification decision requires server authorization',
+  'self-verification is rejected'
+);
+select lives_ok(
+  $$insert into public.direct_messages (id, conversation_id, sender_id, body)
+    values ('50000000-0000-0000-0000-000000000005',
+            '40000000-0000-0000-0000-000000000004',
+            '10000000-0000-0000-0000-000000000001', 'immutable message')$$,
+  'participant can send a legacy direct message as themselves'
+);
+select throws_ok(
+  $$update public.direct_messages set body = 'rewritten message'
+    where id = '50000000-0000-0000-0000-000000000005'$$,
+  '42501', 'message identity and content are immutable',
+  'sent message content cannot be rewritten'
 );
 
 reset role;
