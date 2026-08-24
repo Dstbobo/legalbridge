@@ -22,40 +22,21 @@ import * as ImageManipulator from 'expo-image-manipulator';
 import * as FileSystem from 'expo-file-system/legacy';
 import { Image } from 'react-native';
 
-const RECENT_SESSIONS_KEY = 'lb_recent_sessions';
 const MAX_RECENT = 12;
 
 type RecentSession = { id: string; title: string; ts: number };
 
-async function loadRecentSessions(): Promise<RecentSession[]> {
+async function purgeLegacyPlaintextChats() {
   try {
-    const raw = await AsyncStorage.getItem(RECENT_SESSIONS_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch { return []; }
-}
-
-async function saveSessionMessages(id: string, messages: Message[]) {
-  try {
-    await AsyncStorage.setItem(`lb_session_${id}`, JSON.stringify(messages));
-  } catch {}
-}
-
-async function loadSessionMessages(id: string): Promise<Message[] | null> {
-  try {
-    const raw = await AsyncStorage.getItem(`lb_session_${id}`);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    return parsed.map((m: any) => ({ ...m, timestamp: new Date(m.timestamp), isStreaming: false }));
-  } catch { return null; }
-}
-
-async function saveRecentSession(session: RecentSession) {
-  try {
-    const existing = await loadRecentSessions();
-    const filtered = existing.filter((s) => s.id !== session.id);
-    const next = [session, ...filtered].slice(0, MAX_RECENT);
-    await AsyncStorage.setItem(RECENT_SESSIONS_KEY, JSON.stringify(next));
-  } catch {}
+    const keys = await AsyncStorage.getAllKeys();
+    const sensitiveKeys = keys.filter((key) =>
+      key === 'lb_recent_sessions' ||
+      key === 'lb_saved_documents' ||
+      key.startsWith('lb_session_'));
+    if (sensitiveKeys.length > 0) await AsyncStorage.multiRemove(sensitiveKeys);
+  } catch {
+    // Privacy cleanup is best effort; no new plaintext chat data is written.
+  }
 }
 
 type StagedAttachment = {
@@ -315,9 +296,13 @@ function DocumentActions({ content }: { content: string }) {
     { key: 'save', icon: saved ? 'check' : 'content-save-outline', label: saved ? 'Saved' : 'Save',
       onPress: async () => {
         if (!content || !content.trim()) { Alert.alert('Nothing to save', 'This document is still empty.'); return; }
-        await saveDocument(title, content);
-        setSaved(true);
-        Alert.alert('Saved', 'Document saved to My Documents.');
+        try {
+          await saveDocument(title, content);
+          setSaved(true);
+          Alert.alert('Saved', 'Document saved securely to My Documents.');
+        } catch {
+          Alert.alert('Could not save', 'Sign in and unlock your device, then try again.');
+        }
       } },
   ];
 
@@ -800,6 +785,7 @@ export default function ChatScreen() {
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const [staged, setStaged] = useState<StagedAttachment[]>([]);
   const [recentSessions, setRecentSessions] = useState<RecentSession[]>([]);
+  const recentMessagesRef = useRef<Map<string, Message[]>>(new Map());
   const params = useLocalSearchParams<{ intent?: string; t?: string }>();
 
   // "Start free consultation" (LegalBridge Counsel) lands here with intent=counsel.
@@ -808,16 +794,20 @@ export default function ChatScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params.t]);
 
-  // Persist the conversation on device after each completed turn, so RECENT can reopen it.
+  // Legal conversations remain in memory only. This avoids leaving case facts
+  // and generated advice in plaintext AsyncStorage on a shared or lost device.
   useEffect(() => {
     if (!isLoading && messages.length > 0) {
-      saveSessionMessages(chatIdRef.current, messages);
+      recentMessagesRef.current.set(
+        chatIdRef.current,
+        messages.map((message) => ({ ...message, isStreaming: false })),
+      );
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLoading, messages.length]);
 
   async function openRecentSession(sess: RecentSession) {
-    const msgs = await loadSessionMessages(sess.id);
+    const msgs = recentMessagesRef.current.get(sess.id) ?? null;
     if (msgs && msgs.length) {
       chatIdRef.current = sess.id;
       setMessages(msgs);
@@ -839,7 +829,7 @@ export default function ChatScreen() {
   }, []);
 
   useEffect(() => {
-    loadRecentSessions().then(setRecentSessions);
+    purgeLegacyPlaintextChats();
   }, []);
 
   function scrollToBottom() {
@@ -875,7 +865,6 @@ export default function ChatScreen() {
     const sessionTitle = content || attachmentsToSend[0]?.label || 'Untitled chat';
     if (firstMessage) {
       const session: RecentSession = { id: chatIdRef.current, title: sessionTitle.slice(0, 60), ts: Date.now() };
-      saveRecentSession(session);
       setRecentSessions((prev) => [session, ...prev.filter((s) => s.id !== session.id)].slice(0, MAX_RECENT));
     }
 
