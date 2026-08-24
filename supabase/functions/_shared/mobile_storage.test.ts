@@ -34,3 +34,12 @@ test('saved legal documents are encrypted, chunked, and account-scoped', async (
   assert.equal(source.includes('AsyncStorage.setItem'), false);
   assert.match(source, /AsyncStorage\.removeItem\(LEGACY_STORAGE_KEY\)/);
 });
+
+test('mobile provider calls fail closed instead of using the anonymous key', async () => {
+  const source = await readFile(
+    new URL('../../../mobile/services/chat.service.ts', import.meta.url),
+    'utf8',
+  );
+  assert.match(source, /Sign in is required to use LegalBridge AI services/);
+  assert.equal(source.includes('return SUPABASE_ANON_KEY'), false);
+});

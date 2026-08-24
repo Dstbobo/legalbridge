@@ -8,7 +8,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as WebBrowser from 'expo-web-browser';
 import { LinearGradient } from 'expo-linear-gradient';
-import Markdown from 'react-native-markdown-display';
+import SecureMarkdown from '@/components/SecureMarkdown';
 import { COLORS } from '@/constants/theme';
 import { streamChat } from '@/services/chat.service';
 
@@ -204,9 +204,9 @@ function ArticleReader({ article, onClose, bookmarked, onBookmark }: {
                   </Text>
                 </View>
               ) : (
-                <Markdown style={readerMd}>
+                <SecureMarkdown style={readerMd}>
                   {mode === 'report' && reportPart ? reportPart : summaryPart}
-                </Markdown>
+                </SecureMarkdown>
               )}
 
               <TouchableOpacity style={styles.readOriginalBtn} onPress={() => openInApp(article.article_url)}>
@@ -222,7 +222,7 @@ function ArticleReader({ article, onClose, bookmarked, onBookmark }: {
                     <Text style={styles.followUpQText}>{f.q}</Text>
                   </View>
                   {f.a ? (
-                    <Markdown style={readerMd}>{f.a + (f.streaming ? ' ▋' : '')}</Markdown>
+                    <SecureMarkdown style={readerMd}>{f.a + (f.streaming ? ' ▋' : '')}</SecureMarkdown>
                   ) : (
                     <ActivityIndicator style={{ alignSelf: 'flex-start', marginTop: 8 }} color={COLORS.primary} />
                   )}

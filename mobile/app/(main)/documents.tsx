@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, Modal } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import Markdown from 'react-native-markdown-display';
+import SecureMarkdown from '@/components/SecureMarkdown';
 import { useRouter } from 'expo-router';
 import { COLORS } from '@/constants/theme';
 import { useDocumentsStore, type SavedDocument } from '@/stores/documents.store';
@@ -104,9 +104,9 @@ export default function DocumentsScreen() {
             <View style={{ width: 40 }} />
           </View>
           <ScrollView contentContainerStyle={{ padding: 20, paddingBottom: insets.bottom + 40 }}>
-            <Markdown style={{ body: { color: COLORS.text, fontSize: 15, lineHeight: 24 } }}>
+            <SecureMarkdown style={{ body: { color: COLORS.text, fontSize: 15, lineHeight: 24 } }}>
               {reading?.content ?? ''}
-            </Markdown>
+            </SecureMarkdown>
           </ScrollView>
           {!!reading && (
             <View style={[styles.readerActions, { paddingBottom: insets.bottom + 10 }]}>

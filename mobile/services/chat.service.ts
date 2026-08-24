@@ -10,7 +10,7 @@ async function getAuthToken(): Promise<string> {
     const { data: refreshed } = await supabase.auth.refreshSession();
     if (refreshed.session?.access_token) return refreshed.session.access_token;
   } catch {}
-  return SUPABASE_ANON_KEY;
+  throw new Error('Sign in is required to use LegalBridge AI services.');
 }
 
 export async function streamChat(

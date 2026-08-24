@@ -5,7 +5,7 @@ import {
   Keyboard, Share, Linking, Animated,
 } from 'react-native';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
-import Markdown from 'react-native-markdown-display';
+import SecureMarkdown from '@/components/SecureMarkdown';
 import { BlurView } from 'expo-blur';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -269,9 +269,9 @@ function MessageBubble({ message, userRole }: { message: Message; userRole?: Use
       {message.isStreaming && !message.content ? (
         <ThinkingStatus kind={message.kind} userRole={userRole} />
       ) : (
-        <Markdown style={mdStyles}>
+        <SecureMarkdown style={mdStyles}>
           {message.content + (message.isStreaming ? '▋' : '')}
-        </Markdown>
+        </SecureMarkdown>
       )}
       {message.isDocument && !message.isStreaming && (
         <DocumentActions content={message.content} />
