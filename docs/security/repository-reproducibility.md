@@ -4,7 +4,7 @@ Last reviewed: 2026-08-24
 
 The canonical deployable backend is represented by:
 
-- 17 ordered SQL migrations under `supabase/migrations/`;
+- 18 ordered SQL migrations under `supabase/migrations/`;
 - 11 Edge Function entry points under `supabase/functions/`;
 - shared authorization, quota, fallback and Live-ticket modules under
   `supabase/functions/_shared/`;

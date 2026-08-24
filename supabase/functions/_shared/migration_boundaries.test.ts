@@ -82,3 +82,16 @@ test('legacy direct messages keep immutable identity and content', async () => {
   assert.match(sql, /new\.sender_id is distinct from old\.sender_id/);
   assert.match(sql, /new\.body is distinct from old\.body/);
 });
+
+test('private application tables have explicit authenticated grants', async () => {
+  const source = await readFile(
+    new URL('../../migrations/20260818112000_application_role_grants.sql', import.meta.url),
+    'utf8',
+  );
+  assert.match(source, /revoke all on table[\s\S]*public\.conversations[\s\S]*from public, anon/);
+  assert.match(source, /grant select, insert, update on table public\.conversations to authenticated/);
+  assert.match(source, /grant select, insert on table public\.chat_messages to authenticated/);
+  assert.match(source, /grant select, insert, update on table public\.lawyer_verifications to authenticated/);
+  assert.match(source, /grant select, insert, update on table public\.profiles to authenticated/);
+  assert.equal(/grant\s+all/i.test(source), false);
+});
