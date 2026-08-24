@@ -76,23 +76,11 @@ language sql security definer as $$
     and not exists (select 1 from public.news_bookmarks b where b.article_id = a.id);
 $$;
 
--- ── Schedule ingestion every 45 minutes (pg_cron + pg_net) ─────────────────
+-- ── Scheduling prerequisites ────────────────────────────────────────────────
 create extension if not exists pg_cron;
 create extension if not exists pg_net;
-do $$
-begin
-  perform cron.unschedule('news-ingest') where exists
-    (select 1 from cron.job where jobname = 'news-ingest');
-  perform cron.schedule(
-    'news-ingest', '*/45 * * * *',
-    $cron$ select net.http_post(
-      url := 'https://qcutjnsxiawnejiqwwix.supabase.co/functions/v1/news-ingest',
-      headers := '{"Content-Type":"application/json"}'::jsonb,
-      body := '{}'::jsonb) $cron$
-  );
-exception when others then
-  raise notice 'cron scheduling skipped: %', sqlerrm;
-end $$;
+-- Do not create an anonymous HTTP job here. The later secure-news migration
+-- schedules ingestion only after a matching Vault/Edge shared secret exists.
 
 -- ── Seed sources (Google News RSS = stable, image-light but reliable) ──────
 insert into public.news_sources (name, feed_url, category) values
