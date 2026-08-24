@@ -64,7 +64,7 @@ async def stream_text_deltas(
     system: str,
     messages: List[Dict[str, Any]],
     settings: Optional[Settings] = None,
-    timeout: float = 120.0,
+    timeout: Optional[float] = None,
 ) -> AsyncIterator[str]:
     """
     Yield successive text deltas from a Claude streaming completion.
@@ -93,16 +93,22 @@ async def stream_text_deltas(
         "accept": "text/event-stream",
     }
 
-    timeout_cfg = httpx.Timeout(timeout, connect=15.0, read=timeout, write=30.0)
+    effective_timeout = timeout or float(s.PROVIDER_TIMEOUT_SECONDS)
+    timeout_cfg = httpx.Timeout(
+        effective_timeout,
+        connect=15.0,
+        read=effective_timeout,
+        write=30.0,
+    )
     try:
         async with httpx.AsyncClient(timeout=timeout_cfg) as client:
             async with client.stream(
                 "POST", s.ANTHROPIC_API_URL, json=payload, headers=headers
             ) as resp:
                 if resp.status_code >= 400:
-                    body = (await resp.aread()).decode("utf-8", errors="replace")
+                    await resp.aread()
                     raise AnthropicError(
-                        f"Anthropic {resp.status_code}: {body[:500]}",
+                        "Provider request failed",
                         status_code=resp.status_code,
                     )
 
@@ -128,7 +134,7 @@ async def stream_text_deltas(
     except AnthropicError:
         raise
     except httpx.HTTPError as exc:
-        raise AnthropicError(f"HTTP transport error: {exc}") from exc
+        raise AnthropicError("Provider transport failed") from exc
 
 
 __all__ = ["stream_text_deltas", "AnthropicError"]

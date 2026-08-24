@@ -32,15 +32,16 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, AsyncIterator, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from ..auth import AuthenticatedUser, require_user
 from ..config import Settings, get_settings
 from ..database import engine
+from ..provider_quota import consume_provider_quota
 from ..services import anthropic_client
 from ..services.anthropic_client import AnthropicError
 from ..services.document_prompts import (
@@ -58,15 +59,22 @@ router = APIRouter(prefix="/v1/documents", tags=["documents"])
 
 # ── Request schema ───────────────────────────────────────────────────────
 class ChatMessage(BaseModel):
-    role: str = "user"
-    content: str = ""
+    role: Literal["user", "assistant"] = "user"
+    content: str = Field(min_length=1, max_length=20_000)
 
 
 class DocumentRequest(BaseModel):
-    messages: List[ChatMessage] = Field(default_factory=list)
-    userType: str = "other"  # noqa: N815 — mirror EF field name exactly
-    summary: str = ""
+    messages: List[ChatMessage] = Field(min_length=1, max_length=40)
+    userType: str = Field(default="other", max_length=40)  # noqa: N815 — mirror EF field name exactly
+    summary: str = Field(default="", max_length=20_000)
     profile: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("profile")
+    @classmethod
+    def profile_must_be_bounded(cls, value: Dict[str, Any]) -> Dict[str, Any]:
+        if len(json.dumps(value, ensure_ascii=False).encode("utf-8")) > 20_000:
+            raise ValueError("profile is too large")
+        return value
 
 
 # ── System-prompt builder ────────────────────────────────────────────────
@@ -265,8 +273,8 @@ async def _generate_sse(
         ):
             yield _sse_chunk(delta)
     except AnthropicError as exc:
-        logger.error("chat-documents stream error: %s", exc)
-        if _is_billing_error(str(exc)):
+        logger.error("chat-documents provider failure status=%s", exc.status_code)
+        if exc.status_code == 429 or _is_billing_error(str(exc)):
             user_facing = (
                 "Document service temporarily unavailable due to a billing issue. "
                 "The operator has been notified — please try again shortly."
@@ -299,6 +307,13 @@ async def generate_document(
     Auth is mandatory because every successful request can spend provider
     credits. The user identifier is taken only from the verified JWT.
     """
+    await consume_provider_quota(
+        user_id=user.id,
+        route="api-documents",
+        limit=6,
+        window_seconds=60,
+        settings=settings,
+    )
     messages_dicts: List[Dict[str, Any]] = [m.model_dump() for m in payload.messages]
     last_msg = messages_dicts[-1]["content"] if messages_dicts else ""
     doc_type = detect_document_type(last_msg)

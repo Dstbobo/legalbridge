@@ -42,6 +42,11 @@ def client(monkeypatch):
 
     monkeypatch.setattr(docs_route, "find_template", _no_template)
 
+    async def _allow_quota(**_kwargs):
+        return None
+
+    monkeypatch.setattr(docs_route, "consume_provider_quota", _allow_quota)
+
     from app.main import app
     return TestClient(app)
 
@@ -135,21 +140,34 @@ def test_anthropic_generic_error(client, auth_headers):
     assert "data: [DONE]" in body
 
 
-def test_empty_messages_does_not_crash(client, monkeypatch, auth_headers):
-    # No messages → no template lookup, route should still serialise a system
-    # prompt and attempt to call Anthropic. We mock that out to avoid network.
-    from app.services import anthropic_client
+def test_empty_messages_are_rejected_before_provider_call(client, auth_headers):
+    response = client.post("/v1/documents", json={"messages": []}, headers=auth_headers)
+    assert response.status_code == 422
 
-    async def _fake_stream(*_args, **_kwargs):
-        if False:
-            yield ""  # pragma: no cover
 
-    monkeypatch.setattr(anthropic_client, "stream_text_deltas", _fake_stream)
+def test_oversized_message_is_rejected_before_provider_call(client, auth_headers):
+    response = client.post(
+        "/v1/documents",
+        json={"messages": [{"role": "user", "content": "x" * 20_001}]},
+        headers=auth_headers,
+    )
+    assert response.status_code == 422
 
-    with client.stream("POST", "/v1/documents", json={"messages": []}, headers=auth_headers) as resp:
-        assert resp.status_code == 200
-        body = b"".join(resp.iter_bytes()).decode("utf-8")
-    assert body.strip().endswith("[DONE]")
+
+def test_route_returns_rate_limit_without_calling_provider(client, auth_headers, monkeypatch):
+    from fastapi import HTTPException
+    from app.routes import documents as docs_route
+
+    async def _deny_quota(**_kwargs):
+        raise HTTPException(status_code=429, detail="Provider request limit exceeded")
+
+    monkeypatch.setattr(docs_route, "consume_provider_quota", _deny_quota)
+    response = client.post(
+        "/v1/documents",
+        json={"messages": [{"role": "user", "content": "Draft an agreement"}]},
+        headers=auth_headers,
+    )
+    assert response.status_code == 429
 
 
 def test_anonymous_paid_document_request_is_rejected(client):
