@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { runProviderFallback } from '../_shared/provider_fallback.ts';
 import {
   consumeProviderQuota,
   readJsonBody,
@@ -502,7 +503,11 @@ NEVER wrap the document in markdown code fences (\`\`\`). Output the document di
     const writer = writable.getWriter();
     const encoder = new TextEncoder();
 
-    const emit = (text: string) => writer.write(encoder.encode(`data: ${JSON.stringify({ text })}\n\n`));
+    let outputStarted = false;
+    const emit = (text: string) => {
+      if (text) outputStarted = true;
+      return writer.write(encoder.encode(`data: ${JSON.stringify({ text })}\n\n`));
+    };
 
     // Pipe an SSE body, extracting text with `pick`; returns chars emitted.
     async function pipeSSE(body: ReadableStream<Uint8Array>, pick: (j: any) => string): Promise<number> {
@@ -559,8 +564,8 @@ NEVER wrap the document in markdown code fences (\`\`\`). Output the document di
         console.error('chat-documents: claude unavailable', res.status);
         return false;
       }
-      await pipeSSE(res.body!, (j) => j.delta?.text || '');
-      return true;
+      const emitted = await pipeSSE(res.body!, (j) => j.delta?.text || '');
+      return emitted > 0;
     }
 
     async function tryGemini(): Promise<boolean> {
@@ -588,7 +593,10 @@ NEVER wrap the document in markdown code fences (\`\`\`). Output the document di
           const emitted = await pipeSSE(res.body!, (j) =>
             (j?.candidates?.[0]?.content?.parts ?? []).map((p: any) => p?.text ?? '').join(''));
           if (emitted > 0) return true;
-        } catch (e) { console.error('chat-documents gemini', model, String(e)); }
+        } catch (e) {
+          console.error('chat-documents gemini', model, e instanceof Error ? e.name : 'provider_error');
+          if (outputStarted) return true;
+        }
       }
       return false;
     }
@@ -614,20 +622,23 @@ NEVER wrap the document in markdown code fences (\`\`\`). Output the document di
         if (!res.ok) { console.error('chat-documents groq', res.status); return false; }
         const emitted = await pipeSSE(res.body!, (j) => j?.choices?.[0]?.delta?.content || '');
         return emitted > 0;
-      } catch (e) { console.error('chat-documents groq', String(e)); return false; }
+      } catch (e) {
+        console.error('chat-documents groq', e instanceof Error ? e.name : 'provider_error');
+        return outputStarted;
+      }
     }
 
     (async () => {
       try {
         // Cost-first: Groq leads (free tier), Gemini second, Claude last so
         // credits are only spent when the free engines are down.
-        if (await tryGroq()) return;
-        if (await tryGemini()) return;
-        if (await tryClaude()) return;
-        await emit('Document service is temporarily unavailable. Please try again shortly.');
-      } catch (e: any) {
-        console.error('chat-documents stream error:', e?.message || String(e));
-        await emit('Document drafting failed. Please try again.');
+        await runProviderFallback({
+          providers: [tryGroq, tryGemini, tryClaude],
+          hasOutput: () => outputStarted,
+          emitFallback: () => emit('Document service is temporarily unavailable. Please try again shortly.'),
+          onProviderError: (index, error) =>
+            console.error('chat-documents provider failure', index, error instanceof Error ? error.name : 'provider_error'),
+        });
       } finally {
         await writer.write(encoder.encode('data: [DONE]\n\n'));
         await writer.close();

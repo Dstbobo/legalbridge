@@ -14,6 +14,7 @@
 // ════════════════════════════════════════════════════════════════════
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { runProviderFallback } from '../_shared/provider_fallback.ts';
 import {
   consumeProviderQuota,
   readJsonBody,
@@ -61,7 +62,11 @@ function streamLLM(opts: {
   const { readable, writable } = new TransformStream();
   const writer = writable.getWriter();
   const encoder = new TextEncoder();
-  const emit = (text: string) => writer.write(encoder.encode(`data: ${JSON.stringify({ text })}\n\n`));
+  let outputStarted = false;
+  const emit = (text: string) => {
+    if (text) outputStarted = true;
+    return writer.write(encoder.encode(`data: ${JSON.stringify({ text })}\n\n`));
+  };
 
   async function pipeSSE(body: ReadableStream<Uint8Array>, pick: (j: any) => string): Promise<number> {
     const reader = body.getReader();
@@ -110,9 +115,9 @@ function streamLLM(opts: {
       console.error(`chat-tools ${opts.source}: claude unavailable`, res.status);
       return false;
     }
-    await pipeSSE(res.body!, (j) =>
+    const emitted = await pipeSSE(res.body!, (j) =>
       (j.delta?.type !== 'input_json_delta' ? j.delta?.text || '' : ''));
-    return true;
+    return emitted > 0;
   }
 
   // Convert Claude message content (string or blocks) to Gemini parts.
@@ -155,7 +160,10 @@ function streamLLM(opts: {
         const emitted = await pipeSSE(res.body!, (j) =>
           (j?.candidates?.[0]?.content?.parts ?? []).map((p: any) => p?.text ?? '').join(''));
         if (emitted > 0) return true;
-      } catch (e) { console.error(`chat-tools ${opts.source} gemini`, model, String(e)); }
+      } catch (e) {
+        console.error(`chat-tools ${opts.source} gemini`, model, e instanceof Error ? e.name : 'provider_error');
+        if (outputStarted) return true;
+      }
     }
     return false;
   }
@@ -186,18 +194,21 @@ function streamLLM(opts: {
       if (!res.ok) { console.error(`chat-tools ${opts.source} groq`, res.status); return false; }
       const emitted = await pipeSSE(res.body!, (j) => j?.choices?.[0]?.delta?.content || '');
       return emitted > 0;
-    } catch (e) { console.error(`chat-tools ${opts.source} groq`, String(e)); return false; }
+    } catch (e) {
+      console.error(`chat-tools ${opts.source} groq`, e instanceof Error ? e.name : 'provider_error');
+      return outputStarted;
+    }
   }
 
   (async () => {
     try {
-      if (await tryClaude()) return;
-      if (await tryGemini()) return;
-      if (await tryGroq()) return;
-      await emit(opts.fallbackText);
-    } catch (e: any) {
-      console.error(`chat-tools ${opts.source} error:`, e?.message || String(e));
-      await emit(opts.fallbackText);
+      await runProviderFallback({
+        providers: [tryClaude, tryGemini, tryGroq],
+        hasOutput: () => outputStarted,
+        emitFallback: () => emit(opts.fallbackText),
+        onProviderError: (index, error) =>
+          console.error(`chat-tools ${opts.source} provider failure`, index, error instanceof Error ? error.name : 'provider_error'),
+      });
     } finally {
       await writer.write(encoder.encode('data: [DONE]\n\n'));
       await writer.close();

@@ -108,6 +108,15 @@ test('provider-backed functions apply server-side atomic quotas', async () => {
   }
 });
 
+test('multi-provider streams stop fallback after any visible output', async () => {
+  for (const name of FUNCTION_NAMES) {
+    const source = await functionSource(name);
+    assert.match(source, /await runProviderFallback\(\{/);
+    assert.match(source, /hasOutput: \(\) => outputStarted/);
+    assert.equal(source.includes('(await res.text()).slice'), false);
+  }
+});
+
 test('news functions fail closed and revalidate server-side fetch redirects', async () => {
   const ingest = await functionSource('news-ingest');
   const summarize = await functionSource('news-summarize');

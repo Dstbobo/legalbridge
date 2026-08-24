@@ -17,6 +17,7 @@
 // ════════════════════════════════════════════════════════════════════
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { runProviderFallback } from '../_shared/provider_fallback.ts';
 import {
   consumeProviderQuota,
   readJsonBody,
@@ -399,7 +400,11 @@ function streamClaude(systemPrompt: string, messages: any[], intent: string, pre
   const writer  = writable.getWriter();
   const encoder = new TextEncoder();
 
-  const emit = (text: string) => writer.write(encoder.encode(`data: ${JSON.stringify({ text })}\n\n`));
+  let outputStarted = false;
+  const emit = (text: string) => {
+    if (text) outputStarted = true;
+    return writer.write(encoder.encode(`data: ${JSON.stringify({ text })}\n\n`));
+  };
 
   // Pipe an SSE body, extracting text with `pick`; returns chars emitted.
   async function pipeSSE(body: ReadableStream<Uint8Array>, pick: (j: any) => string): Promise<number> {
@@ -450,8 +455,8 @@ function streamClaude(systemPrompt: string, messages: any[], intent: string, pre
       console.error('claude unavailable:', res.status);
       return false;
     }
-    await pipeSSE(res.body!, (j) => j.delta?.text || '');
-    return true;
+    const emitted = await pipeSSE(res.body!, (j) => j.delta?.text || '');
+    return emitted > 0;
   }
 
   // Gemini fallback — same persona, streamed. Users notice nothing.
@@ -480,7 +485,10 @@ function streamClaude(systemPrompt: string, messages: any[], intent: string, pre
         const emitted = await pipeSSE(res.body!, (j) =>
           (j?.candidates?.[0]?.content?.parts ?? []).map((p: any) => p?.text ?? '').join(''));
         if (emitted > 0) return true;
-      } catch (e) { console.error('gemini', model, String(e)); }
+      } catch (e) {
+        console.error('gemini', model, e instanceof Error ? e.name : 'provider_error');
+        if (outputStarted) return true;
+      }
     }
     return false;
   }
@@ -509,7 +517,10 @@ function streamClaude(systemPrompt: string, messages: any[], intent: string, pre
       if (!res.ok) { console.error('groq', res.status); return false; }
       const emitted = await pipeSSE(res.body!, (j) => j?.choices?.[0]?.delta?.content || '');
       return emitted > 0;
-    } catch (e) { console.error('groq', String(e)); return false; }
+    } catch (e) {
+      console.error('groq', e instanceof Error ? e.name : 'provider_error');
+      return outputStarted;
+    }
   }
 
   (async () => {
@@ -517,19 +528,16 @@ function streamClaude(systemPrompt: string, messages: any[], intent: string, pre
       // Cost-first routing: Groq (generous free tier) leads for English so the
       // app scales cheaply; Nigerian languages stay Gemini-first (Groq is weak
       // there). Claude is the final safety net to preserve credits.
-      if (preferGemini) {
-        if (await tryGemini()) return;
-        if (await tryGroq()) return;
-        if (await tryClaude()) return;
-      } else {
-        if (await tryGroq()) return;
-        if (await tryGemini()) return;
-        if (await tryClaude()) return;
-      }
-      await emit('I am temporarily unavailable due to a service issue. The team has been notified — please try again shortly.');
-    } catch (e: any) {
-      console.error('chat-stream error:', e?.message || String(e));
-      await emit('I encountered an error. Please try again.');
+      const providers = preferGemini
+        ? [tryGemini, tryGroq, tryClaude]
+        : [tryGroq, tryGemini, tryClaude];
+      await runProviderFallback({
+        providers,
+        hasOutput: () => outputStarted,
+        emitFallback: () => emit('I am temporarily unavailable due to a service issue. Please try again shortly.'),
+        onProviderError: (index, error) =>
+          console.error('chat-stream provider failure', index, error instanceof Error ? error.name : 'provider_error'),
+      });
     } finally {
       await writer.write(encoder.encode('data: [DONE]\n\n'));
       await writer.close();
