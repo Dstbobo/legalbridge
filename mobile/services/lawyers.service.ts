@@ -115,13 +115,7 @@ export async function getMyVerification(): Promise<LawyerVerification | null> {
 
 /** The public directory — verified lawyers only, enforced by RLS. */
 export async function listVerifiedLawyers(): Promise<LawyerVerification[]> {
-  const { data, error } = await supabase
-    .from('lawyer_verifications')
-    .select('id,user_id,full_name,scn_number,year_of_call,state,firm,whatsapp,specializations,bio,cert_path,status,admin_note,created_at')
-    .eq('status', 'verified')
-    .order('created_at', { ascending: true });
-  if (error) throw new Error(error.message);
-  return (data ?? []) as LawyerVerification[];
+  return listDirectoryLawyers();
 }
 
 /**
