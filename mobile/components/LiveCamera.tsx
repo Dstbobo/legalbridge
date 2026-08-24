@@ -49,7 +49,7 @@ export default function LiveCamera({ visible, onClose }: { visible: boolean; onC
         if (!cam || !session || !session.isReady) return;
         const photo = await cam.takePictureAsync({
           base64: false, quality: 0.4, skipProcessing: true, shutterSound: false,
-        } as any);
+        });
         if (!photo?.uri) return;
         const scaled = await ImageManipulator.manipulateAsync(
           photo.uri,
