@@ -2,7 +2,8 @@
 # Python 3.12 target
 
 # Web framework
-fastapi==0.115.6
+fastapi==0.141.1
+starlette==1.6.0
 uvicorn[standard]==0.34.0
 
 # Settings / validation
@@ -14,15 +15,15 @@ sqlalchemy[asyncio]==2.0.36
 asyncpg==0.30.0
 
 # JWT verification for Supabase auth tokens
-PyJWT==2.10.1
+PyJWT==2.13.0
 
 # HTTP client — used for Anthropic Messages API + Voyage embeddings
 httpx==0.28.1
 
 # Optional but useful at this phase
-python-multipart==0.0.20
+python-multipart==0.0.32
 
 # ── Test-only (Railway image installs everything, that's fine for now) ──
-pytest==8.3.4
-pytest-asyncio==0.25.0
+pytest==9.1.1
+pytest-asyncio==1.4.0
 respx==0.22.0
