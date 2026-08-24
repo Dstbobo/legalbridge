@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import {
+  consumeProviderQuota,
   readJsonBody,
   requireMethod,
   requirePrincipal,
@@ -321,6 +322,14 @@ serve(async (req) => {
       anonKey: SUPABASE_ANON,
     });
     if (principal.kind !== 'user') throw new Error('unexpected principal');
+    await consumeProviderQuota({
+      supabaseUrl: SUPABASE_URL,
+      serviceRoleKey: SUPABASE_KEY,
+      userId: principal.id,
+      route: 'chat-documents',
+      limit: 6,
+      windowSeconds: 60,
+    });
     const body = await readJsonBody<any>(req, MAX_DOCUMENT_REQUEST_BYTES);
     const {
       messages = [],
@@ -543,10 +552,11 @@ NEVER wrap the document in markdown code fences (\`\`\`). Output the document di
           stream: true,
           system: systemPrompt,
           messages: mappedMessages,
-        })
+        }),
+        signal: AbortSignal.timeout(120_000),
       });
       if (!res.ok) {
-        console.error('chat-documents: claude unavailable', res.status, (await res.text()).slice(0, 200));
+        console.error('chat-documents: claude unavailable', res.status);
         return false;
       }
       await pipeSSE(res.body!, (j) => j.delta?.text || '');
@@ -571,6 +581,7 @@ NEVER wrap the document in markdown code fences (\`\`\`). Output the document di
                 contents,
                 generationConfig: { maxOutputTokens: 8192, temperature: 0.2 },
               }),
+              signal: AbortSignal.timeout(120_000),
             },
           );
           if (!res.ok) { console.error('chat-documents gemini', model, res.status); continue; }
@@ -598,8 +609,9 @@ NEVER wrap the document in markdown code fences (\`\`\`). Output the document di
               ...mappedMessages.map((m: any) => ({ role: m.role, content: String(m.content ?? '') })),
             ],
           }),
+          signal: AbortSignal.timeout(120_000),
         });
-        if (!res.ok) { console.error('chat-documents groq', res.status, (await res.text()).slice(0, 200)); return false; }
+        if (!res.ok) { console.error('chat-documents groq', res.status); return false; }
         const emitted = await pipeSSE(res.body!, (j) => j?.choices?.[0]?.delta?.content || '');
         return emitted > 0;
       } catch (e) { console.error('chat-documents groq', String(e)); return false; }

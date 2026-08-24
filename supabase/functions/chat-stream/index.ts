@@ -18,6 +18,7 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import {
+  consumeProviderQuota,
   readJsonBody,
   requireMethod,
   requirePrincipal,
@@ -311,6 +312,7 @@ async function generateAndSaveSummary(chatId: string, messages: any[], existingS
         temperature: 0.3,
         messages: [{ role: 'user', content: prompt }],
       }),
+      signal: AbortSignal.timeout(30_000),
     });
     if (!res.ok) return;
     const d = await res.json();
@@ -377,6 +379,7 @@ Now write ONLY the status line for the user's message:`;
         temperature: 0.4,
         messages: [{ role: 'user', content: prompt }],
       }),
+      signal: AbortSignal.timeout(15_000),
     });
     if (!res.ok) return new Response(JSON.stringify({ status: '' }), { headers: { ...CORS, 'Content-Type': 'application/json' } });
     const d = await res.json();
@@ -441,9 +444,10 @@ function streamClaude(systemPrompt: string, messages: any[], intent: string, pre
           content: m.content,
         })),
       }),
+      signal: AbortSignal.timeout(90_000),
     });
     if (!res.ok) {
-      console.error('claude unavailable:', res.status, (await res.text()).slice(0, 200));
+      console.error('claude unavailable:', res.status);
       return false;
     }
     await pipeSSE(res.body!, (j) => j.delta?.text || '');
@@ -469,6 +473,7 @@ function streamClaude(systemPrompt: string, messages: any[], intent: string, pre
               contents,
               generationConfig: { maxOutputTokens: intent === 'legal' ? 4096 : 3072, temperature: 0.6 },
             }),
+            signal: AbortSignal.timeout(90_000),
           },
         );
         if (!res.ok) { console.error('gemini', model, res.status); continue; }
@@ -499,8 +504,9 @@ function streamClaude(systemPrompt: string, messages: any[], intent: string, pre
             })),
           ],
         }),
+        signal: AbortSignal.timeout(90_000),
       });
-      if (!res.ok) { console.error('groq', res.status, (await res.text()).slice(0, 200)); return false; }
+      if (!res.ok) { console.error('groq', res.status); return false; }
       const emitted = await pipeSSE(res.body!, (j) => j?.choices?.[0]?.delta?.content || '');
       return emitted > 0;
     } catch (e) { console.error('groq', String(e)); return false; }
@@ -556,12 +562,12 @@ async function proxyHubStream(targetUrl: string, payload: any, intent: string, i
       'Authorization': incomingAuth,
     },
     body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(120_000),
   });
 
   if (!funcRes.ok) {
-    const err = await funcRes.text();
     return new Response(
-      JSON.stringify({ error: `hub ${intent} failed`, detail: err.slice(0, 500) }),
+      JSON.stringify({ error: `hub_${intent}_failed` }),
       { status: 500, headers: { ...CORS, 'Content-Type': 'application/json' } }
     );
   }
@@ -592,6 +598,14 @@ serve(async (req) => {
     });
     if (principal.kind !== 'user') throw new Error('unexpected principal');
     const userId = principal.id;
+    await consumeProviderQuota({
+      supabaseUrl: SUPABASE_URL,
+      serviceRoleKey: SUPABASE_KEY,
+      userId,
+      route: 'chat-stream',
+      limit: 30,
+      windowSeconds: 60,
+    });
     const body = await readJsonBody<any>(req, MAX_CHAT_REQUEST_BYTES);
     const {
       mode    = 'message',  // 'status' | 'message'

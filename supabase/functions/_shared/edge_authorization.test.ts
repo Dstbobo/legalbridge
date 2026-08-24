@@ -9,6 +9,14 @@ const ADMIN_FUNCTION_NAMES = [
   'broadcast-update',
   'engine-check',
 ] as const;
+const QUOTA_FUNCTION_NAMES = [
+  'chat-stream',
+  'chat-documents',
+  'chat-tools',
+  'live',
+  'news-summarize',
+  'send-welcome',
+] as const;
 
 async function functionSource(name: string): Promise<string> {
   return readFile(new URL(`../${name}/index.ts`, import.meta.url), 'utf8');
@@ -91,4 +99,23 @@ test('Live uses verified short-lived tickets instead of caller identity query fi
     /\[functions\.live\]\s+verify_jwt\s*=\s*false/,
     'Live may bypass gateway JWT only because the handler verifies POST auth and signed WS tickets',
   );
+});
+
+test('provider-backed functions apply server-side atomic quotas', async () => {
+  for (const name of QUOTA_FUNCTION_NAMES) {
+    const source = await functionSource(name);
+    assert.match(source, /await consumeProviderQuota\(\{/);
+  }
+});
+
+test('news functions fail closed and revalidate server-side fetch redirects', async () => {
+  const ingest = await functionSource('news-ingest');
+  const summarize = await functionSource('news-summarize');
+  const config = await readFile(new URL('../../config.toml', import.meta.url), 'utf8');
+
+  assert.match(ingest, /requireSharedSecret\(req, 'x-news-ingest-secret'/);
+  assert.match(ingest, /fetchSafeExternalHttp\(url/);
+  assert.match(summarize, /await requirePrincipal\(req/);
+  assert.match(summarize, /fetchSafeExternalHttp\(url/);
+  assert.match(config, /\[functions\.news-summarize\]\s+verify_jwt\s*=\s*true/);
 });

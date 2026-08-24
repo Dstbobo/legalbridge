@@ -2,9 +2,16 @@
 // headline + summary + link ONLY (never full article bodies — copyright).
 // Invoke manually or on a schedule (pg_cron / external cron hitting this URL).
 import { createClient } from 'jsr:@supabase/supabase-js@2';
+import {
+  fetchSafeExternalHttp,
+  requireMethod,
+  requireSharedSecret,
+  securityErrorResponse,
+} from '../_shared/security.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+const NEWS_INGEST_SECRET = Deno.env.get('NEWS_INGEST_SECRET') ?? '';
 
 const db = createClient(SUPABASE_URL, SERVICE_KEY);
 
@@ -57,10 +64,9 @@ function pickImage(itemXml: string): string | null {
  */
 async function resolveArticle(url: string): Promise<{ image: string | null; finalUrl: string | null }> {
   try {
-    const res = await fetch(url, {
+    const res = await fetchSafeExternalHttp(url, {
       headers: { 'user-agent': 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36' },
       signal: AbortSignal.timeout(8000),
-      redirect: 'follow',
     });
     if (!res.ok) return { image: null, finalUrl: null };
     const finalUrl = res.url && !res.url.includes('news.google.com') ? res.url : null;
@@ -96,8 +102,11 @@ function splitTitle(rawTitle: string, fallbackSource: string) {
 }
 
 Deno.serve(async (req) => {
-  if (req.method !== 'POST' && req.method !== 'GET') {
-    return new Response('Method not allowed', { status: 405 });
+  try {
+    requireMethod(req, 'POST');
+    requireSharedSecret(req, 'x-news-ingest-secret', NEWS_INGEST_SECRET);
+  } catch (error) {
+    return securityErrorResponse(error);
   }
 
   const { data: sources, error: srcErr } = await db

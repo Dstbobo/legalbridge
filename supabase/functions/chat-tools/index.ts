@@ -15,6 +15,7 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import {
+  consumeProviderQuota,
   readJsonBody,
   requireMethod,
   requirePrincipal,
@@ -103,9 +104,10 @@ function streamLLM(opts: {
         'content-type': 'application/json',
       },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(120_000),
     });
     if (!res.ok) {
-      console.error(`chat-tools ${opts.source}: claude unavailable`, res.status, (await res.text()).slice(0, 200));
+      console.error(`chat-tools ${opts.source}: claude unavailable`, res.status);
       return false;
     }
     await pipeSSE(res.body!, (j) =>
@@ -142,7 +144,12 @@ function streamLLM(opts: {
       try {
         const res = await fetch(
           `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${GEMINI_KEY}`,
-          { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(gBody) },
+          {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(gBody),
+            signal: AbortSignal.timeout(120_000),
+          },
         );
         if (!res.ok) { console.error(`chat-tools ${opts.source} gemini`, model, res.status); continue; }
         const emitted = await pipeSSE(res.body!, (j) =>
@@ -174,6 +181,7 @@ function streamLLM(opts: {
             })),
           ],
         }),
+        signal: AbortSignal.timeout(120_000),
       });
       if (!res.ok) { console.error(`chat-tools ${opts.source} groq`, res.status); return false; }
       const emitted = await pipeSSE(res.body!, (j) => j?.choices?.[0]?.delta?.content || '');
@@ -210,6 +218,7 @@ async function ragSearch(query: string, matchCount = 5): Promise<string> {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${VOYAGE_KEY}` },
       body: JSON.stringify({ model: "voyage-law-2", input: [query.slice(0, 1500)], input_type: "query" }),
+      signal: AbortSignal.timeout(15_000),
     });
     const eData = await eRes.json();
     const emb = eData?.data?.[0]?.embedding;
@@ -219,6 +228,7 @@ async function ragSearch(query: string, matchCount = 5): Promise<string> {
       method: "POST",
       headers: { "Content-Type": "application/json", apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` },
       body: JSON.stringify({ query_embedding: emb, match_count: matchCount }),
+      signal: AbortSignal.timeout(8_000),
     });
     const docs = await sRes.json();
     if (!docs?.length) return '';
@@ -610,6 +620,14 @@ serve(async (req) => {
       anonKey: SUPABASE_ANON,
     });
     if (principal.kind !== 'user') throw new Error('unexpected principal');
+    await consumeProviderQuota({
+      supabaseUrl: SUPABASE_URL,
+      serviceRoleKey: SUPABASE_KEY,
+      userId: principal.id,
+      route: 'chat-tools',
+      limit: 10,
+      windowSeconds: 60,
+    });
     const body = await readJsonBody<any>(req, MAX_TOOLS_REQUEST_BYTES);
     const {
       tool      = 'search',

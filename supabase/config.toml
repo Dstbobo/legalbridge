@@ -47,3 +47,9 @@ verify_jwt = true
 
 [functions.engine-check]
 verify_jwt = true
+
+[functions.news-summarize]
+verify_jwt = true
+
+[functions.send-welcome]
+verify_jwt = true

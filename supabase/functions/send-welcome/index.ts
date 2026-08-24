@@ -6,6 +6,13 @@
 // A `welcomed` flag on the user's metadata guarantees the email fires only once,
 // no matter how many times the app calls it.
 import { createClient } from 'jsr:@supabase/supabase-js@2';
+import {
+  consumeProviderQuota,
+  requireMethod,
+  requirePrincipal,
+  securityErrorResponse,
+  type Principal,
+} from '../_shared/security.ts';
 
 const RESEND_KEY = Deno.env.get('RESEND_API_KEY') ?? '';
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -79,29 +86,37 @@ function welcomeHtml(name: string): string {
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS });
 
-  const authHeader = req.headers.get('Authorization') ?? '';
-  if (!authHeader) {
-    return new Response(JSON.stringify({ error: 'unauthorized' }), {
-      status: 401, headers: { ...CORS, 'Content-Type': 'application/json' },
-    });
-  }
-
-  // Identify the caller from their own JWT — we only ever email this user.
-  const asUser = createClient(SUPABASE_URL, ANON_KEY, {
-    global: { headers: { Authorization: authHeader } },
-  });
-  const { data: { user }, error: userErr } = await asUser.auth.getUser();
-  if (userErr || !user?.email) {
-    return new Response(JSON.stringify({ error: 'unauthorized' }), {
-      status: 401, headers: { ...CORS, 'Content-Type': 'application/json' },
-    });
+  let principal: Principal;
+  try {
+    requireMethod(req, 'POST');
+    principal = await requirePrincipal(req, { supabaseUrl: SUPABASE_URL, anonKey: ANON_KEY });
+    if (principal.kind !== 'user' || !principal.email) {
+      return new Response(JSON.stringify({ error: 'unauthorized' }), {
+        status: 401, headers: { ...CORS, 'Content-Type': 'application/json' },
+      });
+    }
+  } catch (error) {
+    return securityErrorResponse(error, CORS);
   }
 
   // Fire once per user — if we've already welcomed them, do nothing.
-  if (user.user_metadata?.welcomed) {
+  if (principal.userMetadata.welcomed) {
     return new Response(JSON.stringify({ sent: false, reason: 'already welcomed' }), {
       headers: { ...CORS, 'Content-Type': 'application/json' },
     });
+  }
+
+  try {
+    await consumeProviderQuota({
+      supabaseUrl: SUPABASE_URL,
+      serviceRoleKey: SERVICE_KEY,
+      userId: principal.id,
+      route: 'send-welcome',
+      limit: 2,
+      windowSeconds: 3600,
+    });
+  } catch (error) {
+    return securityErrorResponse(error, CORS);
   }
 
   if (!RESEND_KEY) {
@@ -111,33 +126,40 @@ Deno.serve(async (req) => {
   }
 
   const who = firstName(
-    (user.user_metadata?.full_name ?? user.user_metadata?.name ?? '') as string,
-    user.email,
+    (principal.userMetadata.full_name ?? principal.userMetadata.name ?? '') as string,
+    principal.email,
   );
 
-  const res = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${RESEND_KEY}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      from: FROM,
-      to: [user.email],
-      subject: 'Welcome to LegalBridge',
-      html: welcomeHtml(who),
-      reply_to: 'hello@legalbridge.ng',
-    }),
-  });
+  let res: Response;
+  try {
+    res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${RESEND_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        from: FROM,
+        to: [principal.email],
+        subject: 'Welcome to LegalBridge',
+        html: welcomeHtml(who),
+        reply_to: 'hello@legalbridge.ng',
+      }),
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch {
+    return new Response(JSON.stringify({ error: 'send_failed' }), {
+      status: 502, headers: { ...CORS, 'Content-Type': 'application/json' },
+    });
+  }
 
   if (!res.ok) {
-    const detail = await res.text();
-    return new Response(JSON.stringify({ error: 'send failed', detail }), {
+    return new Response(JSON.stringify({ error: 'send_failed' }), {
       status: 502, headers: { ...CORS, 'Content-Type': 'application/json' },
     });
   }
 
   // Mark as welcomed so we never send twice (needs service role to write metadata).
   const admin = createClient(SUPABASE_URL, SERVICE_KEY);
-  await admin.auth.admin.updateUserById(user.id, {
-    user_metadata: { ...user.user_metadata, welcomed: true },
+  await admin.auth.admin.updateUserById(principal.id, {
+    user_metadata: { ...principal.userMetadata, welcomed: true },
   });
 
   return new Response(JSON.stringify({ sent: true }), {

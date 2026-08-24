@@ -14,6 +14,7 @@
 // ───────────────────────────────────────────────────────────────────────────
 import { issueLiveTicket, verifyLiveTicket } from '../_shared/live_ticket.ts';
 import {
+  consumeProviderQuota,
   requirePrincipal,
   securityErrorResponse,
 } from '../_shared/security.ts';
@@ -22,6 +23,7 @@ const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY') ?? '';
 const LIVE_TICKET_SECRET = Deno.env.get('LIVE_TICKET_SECRET') ?? '';
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL') ?? '';
 const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
+const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
 const GEMINI_HOST =
   'wss://generativelanguage.googleapis.com/ws/' +
   'google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent';
@@ -47,6 +49,14 @@ Deno.serve(async (req) => {
           anonKey: SUPABASE_ANON_KEY,
         });
         if (principal.kind !== 'user') throw new Error('unexpected principal');
+        await consumeProviderQuota({
+          supabaseUrl: SUPABASE_URL,
+          serviceRoleKey: SUPABASE_SERVICE_ROLE_KEY,
+          userId: principal.id,
+          route: 'live',
+          limit: 10,
+          windowSeconds: 60,
+        });
         const ticket = await issueLiveTicket(principal.id, LIVE_TICKET_SECRET);
         return new Response(JSON.stringify({ ticket, expiresIn: 60 }), { headers: CORS });
       } catch (error) {

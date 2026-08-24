@@ -2,11 +2,19 @@
 // Body: { articleId } → { summary } (markdown). Summary is produced once and
 // stored on the article row; later readers get the cached copy instantly.
 import { createClient } from 'jsr:@supabase/supabase-js@2';
+import {
+  consumeProviderQuota,
+  fetchSafeExternalHttp,
+  readJsonBody,
+  requireMethod,
+  requirePrincipal,
+  securityErrorResponse,
+} from '../_shared/security.ts';
 
-const db = createClient(
-  Deno.env.get('SUPABASE_URL')!,
-  Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
-);
+const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
+const SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+const ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!;
+const db = createClient(SUPABASE_URL, SERVICE_KEY);
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY')!;
 const GEMINI_KEY = Deno.env.get('GEMINI_API_KEY') ?? '';
 const MODEL = 'claude-sonnet-4-5';
@@ -21,10 +29,9 @@ const CORS = {
 
 /** Pull readable text out of an article page (crude but effective). */
 async function extractArticleText(url: string): Promise<string> {
-  const res = await fetch(url, {
+  const res = await fetchSafeExternalHttp(url, {
     headers: { 'user-agent': 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36' },
     signal: AbortSignal.timeout(12000),
-    redirect: 'follow',
   });
   if (!res.ok) return '';
   let html = await res.text();
@@ -49,10 +56,26 @@ async function extractArticleText(url: string): Promise<string> {
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS });
-  if (req.method !== 'POST') return new Response('Method not allowed', { status: 405, headers: CORS });
 
   try {
-    const { articleId } = await req.json();
+    requireMethod(req, 'POST');
+    const principal = await requirePrincipal(req, {
+      supabaseUrl: SUPABASE_URL,
+      anonKey: ANON_KEY,
+      serviceRoleKey: SERVICE_KEY,
+      allowServiceRole: true,
+    });
+    if (principal.kind === 'user') {
+      await consumeProviderQuota({
+        supabaseUrl: SUPABASE_URL,
+        serviceRoleKey: SERVICE_KEY,
+        userId: principal.id,
+        route: 'news-summarize',
+        limit: 6,
+        windowSeconds: 60,
+      });
+    }
+    const { articleId } = await readJsonBody<{ articleId?: string }>(req, 8 * 1024);
     if (!articleId) return Response.json({ error: 'articleId required' }, { status: 400, headers: CORS });
 
     const { data: art, error } = await db
@@ -157,11 +180,11 @@ Deno.serve(async (req) => {
           max_tokens: 1600,
           messages: [{ role: 'user', content: prompt }],
         }),
+        signal: AbortSignal.timeout(45_000),
       });
       if (!aiRes.ok) {
-        const detail = await aiRes.text();
         return Response.json(
-          { error: `AI error (gemini: ${geminiErr || 'no key'}) (claude: ${detail.slice(0, 200)})` },
+          { error: 'provider_unavailable' },
           { status: 502, headers: CORS },
         );
       }
@@ -172,7 +195,7 @@ Deno.serve(async (req) => {
 
     await db.from('news_articles').update({ ai_summary: summary }).eq('id', articleId);
     return Response.json({ summary, cached: false }, { headers: CORS });
-  } catch (e) {
-    return Response.json({ error: String((e as Error)?.message ?? e) }, { status: 500, headers: CORS });
+  } catch (error) {
+    return securityErrorResponse(error, CORS);
   }
 });
